@@ -54,5 +54,18 @@
                 <action android:name="android.content.pm.action.CONFIRM_PIN_SHORTCUT" />
             </intent-filter>
         </activity>
+        <!-- Double-tap to lock: an accessibility service whose only job is GLOBAL_ACTION_LOCK_SCREEN. -->
+        <service
+            android:name=".LockService"
+            android:exported="false"
+            android:label="@string/lock_service_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/lock_service" />
+        </service>
     </application>
 </manifest>

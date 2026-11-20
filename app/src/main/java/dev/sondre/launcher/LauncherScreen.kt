@@ -41,7 +41,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.automirrored.filled.TrendingUp
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Folder
@@ -76,6 +76,8 @@ import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalViewConfiguration
+import android.os.SystemClock
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.focus.FocusManager
@@ -224,6 +226,10 @@ fun LauncherScreen(vm: LauncherViewModel) {
         val clockAlpha by animateFloatAsState(if (clockShown) 1f else 0f, label = "clock")
         val context = LocalContext.current
         var clockBounds by remember { mutableStateOf(Rect.Zero) }
+        // Double-tap to lock: time and place of the previous tap on the blank area.
+        var lastBlankTap by remember { mutableStateOf<Pair<Long, Offset>?>(null) }
+        var showLockSetup by remember { mutableStateOf(false) }
+        val viewConfig = LocalViewConfiguration.current
 
         Box(Modifier.weight(1f).fillMaxWidth()) {
             Clock(
@@ -247,8 +253,32 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 .clearFocusOnPress(focusManager)
                 // The list covers the clock, so taps there are picked up here: only taps
                 // nothing else in the list used (not scrolls, not section headers).
-                .onUnusedTap { rootPos ->
-                    if (clockShown && clockBounds.contains(rootPos)) openAlarms(context)
+                .onUnusedTap { local, root ->
+                    if (!clockShown) return@onUnusedTap
+                    if (clockBounds.contains(root)) {
+                        lastBlankTap = null
+                        openAlarms(context)
+                        return@onUnusedTap
+                    }
+                    // The blank area starts below both the section tiles and the clock.
+                    val tilesBottom = listState.layoutInfo.visibleItemsInfo.lastOrNull()
+                        ?.let { (it.offset + it.size).toFloat() } ?: 0f
+                    val clockBottom = clockBounds.bottom - (root.y - local.y) // root → list coords
+                    if (local.y <= maxOf(tilesBottom, clockBottom)) {
+                        lastBlankTap = null
+                        return@onUnusedTap
+                    }
+                    val now = SystemClock.uptimeMillis()
+                    val prev = lastBlankTap
+                    val isDouble = prev != null &&
+                        now - prev.first <= viewConfig.doubleTapTimeoutMillis + 100 &&
+                        (local - prev.second).getDistance() <= viewConfig.touchSlop * 4
+                    if (isDouble) {
+                        lastBlankTap = null
+                        if (!LockService.lock()) showLockSetup = true
+                    } else {
+                        lastBlankTap = now to local
+                    }
                 }
                 // On the bare home screen: swipe up opens Favorites + All apps,
                 // swipe down pulls down the notification shade.
@@ -288,7 +318,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     emptyHint = "Long-press an app to add it here",
                 )
                 section(
-                    id = SectionId.FREQUENT, title = "Most used", icon = Icons.AutoMirrored.Filled.TrendingUp,
+                    id = SectionId.FREQUENT, title = "Most used", icon = Icons.Filled.Schedule,
                     apps = state.frequent,
                     state = state, onToggle = vm::toggleSection, row = row,
                     emptyHint = "Apps you open often will show up here",
@@ -337,6 +367,29 @@ fun LauncherScreen(vm: LauncherViewModel) {
             }
         }
         } // Box(clock + list)
+
+        if (showLockSetup) {
+            AlertDialog(
+                onDismissRequest = { showLockSetup = false },
+                shape = RectangleShape,
+                properties = WideDialog,
+                modifier = Modifier.fillMaxWidth(Style.menuWidthFraction),
+                title = { Text("Double-tap to lock") },
+                text = {
+                    Text(
+                        "To lock the phone with a double-tap, switch on \"Home: double-tap to lock\" under " +
+                            "Settings → Accessibility → Installed apps. It's only used to lock the screen, " +
+                            "and fingerprint/face unlock keep working."
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = { showLockSetup = false; LockService.openSettings(context) }) {
+                        Text("Open settings")
+                    }
+                },
+                dismissButton = { TextButton(onClick = { showLockSetup = false }) { Text("Not now") } },
+            )
+        }
 
         // Full-width, square bar at the bottom. Its background runs under the navigation bar,
         // and it rides on top of the keyboard when that's open.
@@ -403,14 +456,14 @@ private fun Modifier.clearFocusOnPress(focusManager: FocusManager): Modifier = p
  * Calls [onTap] (with the position in root coordinates) for taps that no child consumed:
  * a scroll or a click on a row/header cancels it. Runs in the Final pass so children go first.
  */
-private fun Modifier.onUnusedTap(onTap: (Offset) -> Unit): Modifier = composed {
+private fun Modifier.onUnusedTap(onTap: (local: Offset, root: Offset) -> Unit): Modifier = composed {
     var coords by remember { mutableStateOf<LayoutCoordinates?>(null) }
     val currentOnTap by rememberUpdatedState(onTap)
     onGloballyPositioned { coords = it }.pointerInput(Unit) {
         awaitEachGesture {
             awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Final)
             val up = waitForUpOrCancellation(pass = PointerEventPass.Final) ?: return@awaitEachGesture
-            coords?.let { currentOnTap(it.localToRoot(up.position)) }
+            coords?.let { currentOnTap(up.position, it.localToRoot(up.position)) }
         }
     }
 }

@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Home</string>
+    <string name="lock_service_label">Home: double-tap to lock</string>
+    <string name="lock_service_description">Lets you lock the phone by double-tapping an empty part of the home screen. It is only used to lock the screen; it does not read anything on your screen.</string>
 </resources>

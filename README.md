@@ -5,7 +5,7 @@ A minimal Android home screen: collapsible sections — **Favorites**, **Most us
 `[square icon] App name` rows over the wallpaper, with a full-width search bar at the bottom.
 
 - Every section starts collapsed and shows only a dark, sharp-cornered tile with a chevron (›) and an icon:
-  ★ Favorites, ↗ Most used, ⊞ All apps. Tap it to expand and see the title.
+  ★ Favorites, 🕓 Most used, ⊞ All apps. Tap it to expand and see the title.
   Swiping up on the home screen opens Favorites and All apps; swiping down pulls down the
   notification shade (both only while nothing is open). Back closes whatever is open.
   All apps has a small `B ──── B` divider before each new letter.
@@ -32,6 +32,10 @@ A minimal Android home screen: collapsible sections — **Favorites**, **Most us
 - Long-press menus and dialogs are wide (90% of the screen) with sharp corners.
 - Pressing Home while the launcher is showing clears the search, collapses everything and scrolls to the top.
 - Back never leaves the launcher.
+- **Double-tap the empty area** (below the tiles/clock, above the search bar, nothing open) to lock the phone.
+  Needs "Home: double-tap to lock" switched on once under Settings → Accessibility → Installed apps
+  (an accessibility service whose only job is the lock action; fingerprint/face unlock keep working).
+  The first double-tap without it shows a dialog that links there.
 - **Web apps / "Add to home screen"** (e.g. Firefox): the launcher accepts these pin requests and lists
   them in All apps like any app (favorites, groups, search all work). Long-press → "Remove from launcher".
   Android only shows a launcher the shortcuts pinned *to it*, so ones added while another launcher was
@@ -48,6 +52,7 @@ A minimal Android home screen: collapsible sections — **Favorites**, **Most us
 | `.../AppRepository.kt` | App list (`LauncherApps`), launching, square icon rendering, change callbacks |
 | `.../UsageStore.kt` | Favorites, groups and launch counts (SharedPreferences) |
 | `.../SubItems.kt` | In-app search sources: app shortcuts and contacts, and launching them |
+| `.../LockService.kt` | Accessibility service used only to lock the screen (double-tap) |
 | `.../Clock.kt` | Home-screen clock (minute ticks, locale date) and opening the alarms list |
 | `.../LauncherViewModel.kt` | Combines the above into `UiState` |
 | `.../LauncherScreen.kt` | Compose UI. Tweak sizes and colors in `Style` at the top |
