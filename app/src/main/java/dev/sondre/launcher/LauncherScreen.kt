@@ -100,6 +100,7 @@ import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.PopupProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -442,13 +443,18 @@ fun LauncherScreen(vm: LauncherViewModel) {
 }
 
 /**
- * Drops focus (hiding the keyboard and stopping the cursor) on any press inside this element.
- * Observes the initial pass without consuming, so taps and scrolls still reach the children.
+ * Drops focus (hiding the keyboard and stopping the cursor) when a short tap inside this element
+ * is released. Long-presses keep it: hiding the keyboard under the finger would shift the
+ * bottom-anchored search results while the long-press menu opens. Only observes the Initial
+ * pass, so taps, long-presses and scrolls still reach the children.
  */
 private fun Modifier.clearFocusOnPress(focusManager: FocusManager): Modifier = pointerInput(focusManager) {
     awaitEachGesture {
         awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-        focusManager.clearFocus()
+        val up = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
+            waitForUpOrCancellation(PointerEventPass.Initial)
+        }
+        if (up != null) focusManager.clearFocus()
     }
 }
 
@@ -726,7 +732,12 @@ private fun LauncherMenu(expanded: Boolean, onDismiss: () -> Unit, actions: List
         modifier = Modifier.width(right - left),
         offset = DpOffset(left, 0.dp),
         shape = RectangleShape,
+        // Not focusable: a focusable popup steals window focus, which makes Android hide the
+        // keyboard (and shifts the search results) when long-pressing a result.
+        properties = PopupProperties(focusable = false, dismissOnClickOutside = true),
     ) {
+        // Without focus the popup doesn't get Back itself, so close it from the activity's handler.
+        BackHandler(onBack = onDismiss)
         actions.forEachIndexed { i, action ->
             if (i > 0) HorizontalDivider(thickness = 0.5.dp, color = Style.menuDivider)
             DropdownMenuItem(
