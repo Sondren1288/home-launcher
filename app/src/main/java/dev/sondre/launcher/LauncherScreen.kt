@@ -16,6 +16,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.isImeVisible
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -34,8 +39,8 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
@@ -57,6 +62,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.focus.FocusManager
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.RectangleShape
@@ -76,9 +85,12 @@ private object Style {
     val rowVerticalPadding = 7.dp
     val labelSize = 16.sp
     val subLabelSize = 15.sp
-    val scrim = Color.Black.copy(alpha = 0.55f)
+    /** How dark the wallpaper gets while a section or the search is open. */
+    const val scrimAlpha = 0.55f
     val text = Color.White
     val dim = Color.White.copy(alpha = 0.55f)
+    /** Collapsed chevrons sit on the bare wallpaper, so keep them brighter. */
+    val chevron = Color.White.copy(alpha = 0.85f)
     val searchBar = Color.White.copy(alpha = 0.10f)
 }
 
@@ -89,6 +101,7 @@ private sealed interface DialogState {
     data class DeleteGroup(val group: AppGroup) : DialogState
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun LauncherScreen(vm: LauncherViewModel) {
     val state by vm.state.collectAsStateWithLifecycle()
@@ -113,10 +126,24 @@ fun LauncherScreen(vm: LauncherViewModel) {
         if (vm.query.isNotEmpty()) vm.updateQuery("") else focusManager.clearFocus()
     }
 
+    // Stop the cursor (and drop focus) once the keyboard has been dismissed, e.g. with the
+    // keyboard's own hide button or the back gesture.
+    var searchFocused by remember { mutableStateOf(false) }
+    val imeVisible = WindowInsets.isImeVisible
+    var imeWasVisible by remember { mutableStateOf(false) }
+    LaunchedEffect(imeVisible) {
+        if (imeWasVisible && !imeVisible) focusManager.clearFocus()
+        imeWasVisible = imeVisible
+    }
+
+    // Darken the wallpaper only while something is open: a section, or the search.
+    val dimmed = state.expanded.isNotEmpty() || searchFocused || vm.query.isNotEmpty()
+    val scrimAlpha by animateFloatAsState(if (dimmed) Style.scrimAlpha else 0f, label = "scrim")
+
     Column(
         Modifier
             .fillMaxSize()
-            .background(Style.scrim)
+            .background(Color.Black.copy(alpha = scrimAlpha))
             .statusBarsPadding()
     ) {
         val row: @Composable (AppEntry) -> Unit = { app ->
@@ -135,7 +162,13 @@ fun LauncherScreen(vm: LauncherViewModel) {
             )
         }
 
-        LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth()) {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .clearFocusOnPress(focusManager),
+        ) {
             if (state.isSearching) {
                 if (state.results.isEmpty()) {
                     item { Hint("No apps match \"${state.query}\"") }
@@ -214,6 +247,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 query = vm.query,
                 onQueryChange = vm::updateQuery,
                 onGo = vm::launchTopResult,
+                onFocusChange = { searchFocused = it },
             )
         }
     }
@@ -248,6 +282,17 @@ fun LauncherScreen(vm: LauncherViewModel) {
 }
 
 /**
+ * Drops focus (hiding the keyboard and stopping the cursor) on any press inside this element.
+ * Observes the initial pass without consuming, so taps and scrolls still reach the children.
+ */
+private fun Modifier.clearFocusOnPress(focusManager: FocusManager): Modifier = pointerInput(focusManager) {
+    awaitEachGesture {
+        awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+        focusManager.clearFocus()
+    }
+}
+
+/**
  * A collapsible section: header row with a chevron, and the apps when expanded.
  * Item keys are prefixed with the section id because an app can appear in several sections.
  */
@@ -273,7 +318,12 @@ private fun LazyListScope.section(
 }
 
 @Composable
-private fun SearchField(query: String, onQueryChange: (String) -> Unit, onGo: () -> Unit) {
+private fun SearchField(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    onGo: () -> Unit,
+    onFocusChange: (Boolean) -> Unit,
+) {
     TextField(
         value = query,
         onValueChange = onQueryChange,
@@ -291,7 +341,9 @@ private fun SearchField(query: String, onQueryChange: (String) -> Unit, onGo: ()
             unfocusedTextColor = Style.text,
             cursorColor = Style.text,
         ),
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .onFocusChanged { onFocusChange(it.isFocused) },
     )
 }
 
@@ -305,36 +357,41 @@ private fun SectionHeader(
     menu: (@Composable ColumnScope.(close: () -> Unit) -> Unit)?,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
-    val rotation by animateFloatAsState(if (expanded) 180f else 0f, label = "chevron")
+    // Points right when collapsed, down when expanded.
+    val rotation by animateFloatAsState(if (expanded) 90f else 0f, label = "chevron")
     Box {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
                 .fillMaxWidth()
                 .combinedClickable(
+                    onClickLabel = if (expanded) "Collapse $title" else "Expand $title",
                     onClick = onToggle,
                     onLongClick = if (menu != null) ({ menuOpen = true }) else null,
                 )
-                .padding(start = 20.dp, end = 16.dp, top = 14.dp, bottom = 6.dp),
+                .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 6.dp),
         ) {
-            Text(
-                text = title.uppercase(),
-                color = Style.dim,
-                fontSize = 12.sp,
-                letterSpacing = 1.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f, fill = false),
-            )
-            Spacer(Modifier.width(8.dp))
-            Text(text = count.toString(), color = Style.dim.copy(alpha = 0.35f), fontSize = 12.sp)
-            Spacer(Modifier.weight(1f))
             Icon(
-                imageVector = Icons.Filled.KeyboardArrowDown,
-                contentDescription = if (expanded) "Collapse" else "Expand",
-                tint = Style.dim,
-                modifier = Modifier.size(20.dp).rotate(rotation),
+                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = title,
+                tint = if (expanded) Style.dim else Style.chevron,
+                modifier = Modifier.size(22.dp).rotate(rotation),
             )
+            // Collapsed sections show only the chevron; the title appears once expanded.
+            if (expanded) {
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    text = title.uppercase(),
+                    color = Style.dim,
+                    fontSize = 12.sp,
+                    letterSpacing = 1.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(text = count.toString(), color = Style.dim.copy(alpha = 0.35f), fontSize = 12.sp)
+            }
         }
         if (menu != null) {
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {

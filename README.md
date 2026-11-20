@@ -4,7 +4,9 @@ A minimal Android home screen: collapsible sections — **Favorites**,
 **Most used**, your **groups**, and **Other apps (A–Z)** — as a plain list of
 `[square icon] App name` rows over the wallpaper, with a full-width search bar at the bottom.
 
-- Every section starts collapsed; tap a header (or its ⌄ arrow) to expand it.
+- Every section starts collapsed and shows only a chevron (›); tap it to expand and see the title.
+  The wallpaper is shown as-is until a section is expanded or the search is in use, then it's darkened.
+- Tapping anywhere outside the search bar, or hiding the keyboard, ends the search focus (no blinking cursor).
 - Type to filter. Search covers all apps, regardless of what's collapsed. Matching ignores case and accents and ranks: prefix > word prefix > initials
   (`gm` → Google Maps) > substring > subsequence. Ties go to the app you launch most.
   Press Go/Enter on the keyboard to open the top result.
