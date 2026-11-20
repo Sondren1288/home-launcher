@@ -203,6 +203,18 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
         expanded.value = expanded.value.let { if (id in it) it - id else it + id }
     }
 
+    /** Swipe up on the home screen: open Favorites and All apps. */
+    fun expandHome() {
+        expanded.value = expanded.value + SectionId.FAVORITES + SectionId.OTHER
+    }
+
+    /** Back: close whatever is open. Returns false if nothing was open. */
+    fun collapseAll(): Boolean {
+        if (expanded.value.isEmpty()) return false
+        expanded.value = emptySet()
+        return true
+    }
+
     fun launch(app: AppEntry, sourceBounds: Rect? = null) {
         try {
             repository.launch(app, sourceBounds)

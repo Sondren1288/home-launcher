@@ -89,6 +89,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -126,6 +127,10 @@ private object Style {
     val clockTimeSize = 80.sp
     val clockDateSize = 15.sp
     val clockTop = 6.dp
+    /** Letter in the A–Z dividers. */
+    val letterSize = 11.sp
+    /** How far a swipe up on the home screen must travel to open Favorites + All apps. */
+    val swipeUpDistance = 48.dp
 }
 
 /** Dialogs ignore the platform's narrow default width so they can use [Style.menuWidthFraction]. */
@@ -158,14 +163,19 @@ fun LauncherScreen(vm: LauncherViewModel) {
         }
     }
 
-    // A launcher must never "go back" anywhere; back only clears search / hides the keyboard.
+    // A launcher must never "go back" anywhere. Back clears the search, then hides the keyboard,
+    // then closes any open sections.
+    var searchFocused by remember { mutableStateOf(false) }
     BackHandler {
-        if (vm.query.isNotEmpty()) vm.updateQuery("") else focusManager.clearFocus()
+        when {
+            vm.query.isNotEmpty() -> vm.updateQuery("")
+            searchFocused -> focusManager.clearFocus()
+            else -> vm.collapseAll()
+        }
     }
 
     // Stop the cursor (and drop focus) once the keyboard has been dismissed, e.g. with the
     // keyboard's own hide button or the back gesture.
-    var searchFocused by remember { mutableStateOf(false) }
     val imeVisible = WindowInsets.isImeVisible
     var imeWasVisible by remember { mutableStateOf(false) }
     LaunchedEffect(imeVisible) {
@@ -230,7 +240,9 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 // nothing else in the list used (not scrolls, not section headers).
                 .onUnusedTap { rootPos ->
                     if (clockShown && clockBounds.contains(rootPos)) openAlarms(context)
-                },
+                }
+                // Swipe up on the bare home screen opens Favorites + All apps.
+                .onSwipeUp(enabled = clockShown, minDistance = Style.swipeUpDistance) { vm.expandHome() },
         ) {
             if (state.isSearching) {
                 if (state.results.isEmpty()) {
@@ -271,6 +283,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     apps = state.ungrouped,
                     count = state.ungrouped.size + groups.sumOf { it.apps.size },
                     state = state, onToggle = vm::toggleSection, row = row,
+                    letterDividers = true,
                 ) {
                     // Groups live inside "All apps", above the ungrouped apps, like folders.
                     groups.forEachIndexed { index, (group, apps) ->
@@ -385,6 +398,36 @@ private fun Modifier.onUnusedTap(onTap: (Offset) -> Unit): Modifier = composed {
 }
 
 /**
+ * Calls [onSwipe] for a mostly-vertical upward swipe of at least [minDistance]. Only observes
+ * (Initial pass, nothing consumed), so the list still scrolls normally once it's expanded.
+ */
+private fun Modifier.onSwipeUp(enabled: Boolean, minDistance: Dp, onSwipe: () -> Unit): Modifier = composed {
+    val currentEnabled by rememberUpdatedState(enabled)
+    val currentOnSwipe by rememberUpdatedState(onSwipe)
+    pointerInput(Unit) {
+        val threshold = minDistance.toPx()
+        awaitEachGesture {
+            val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+            if (!currentEnabled) return@awaitEachGesture
+            var fired = false
+            while (true) {
+                val event = awaitPointerEvent(PointerEventPass.Initial)
+                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                val d = change.position - down.position
+                if (!fired && -d.y > threshold && -d.y > 2 * kotlin.math.abs(d.x)) {
+                    fired = true
+                    currentOnSwipe()
+                }
+                // Once it has opened the sections, the rest of this swipe shouldn't also
+                // scroll the freshly expanded list.
+                if (fired) change.consume()
+                if (!change.pressed) break
+            }
+        }
+    }
+}
+
+/**
  * A collapsible section: header row with a chevron, and the apps when expanded.
  * Item keys are prefixed with the section id because an app can appear in several sections.
  */
@@ -398,6 +441,8 @@ private fun LazyListScope.section(
     row: @Composable (AppEntry) -> Unit,
     count: Int = apps.size,
     emptyHint: String? = null,
+    /** Insert "B ──── B" dividers between letters (for the A–Z list). */
+    letterDividers: Boolean = false,
     /** Extra items shown above [apps] while expanded (the groups, for "All apps"). */
     nested: LazyListScope.() -> Unit = {},
 ) {
@@ -410,7 +455,45 @@ private fun LazyListScope.section(
         item(key = "hint:$id") { Hint(emptyHint) }
     }
     nested()
-    items(apps, key = { "$id:${it.key}" }) { row(it) }
+    if (letterDividers) {
+        val entries = AppSearch.withLetterDividers(apps) { it.label }
+        items(
+            entries,
+            key = {
+                when (it) {
+                    is AppSearch.Lettered.Divider -> "$id:letter:${it.letter}"
+                    is AppSearch.Lettered.Item -> "$id:${it.item.key}"
+                }
+            },
+            contentType = { if (it is AppSearch.Lettered.Divider) "divider" else "app" },
+        ) {
+            when (it) {
+                is AppSearch.Lettered.Divider -> LetterDivider(it.letter)
+                is AppSearch.Lettered.Item -> row(it.item)
+            }
+        }
+    } else {
+        items(apps, key = { "$id:${it.key}" }) { row(it) }
+    }
+}
+
+/** "B ──────── B": a full-width divider that names the letter coming up. */
+@Composable
+private fun LetterDivider(letter: String) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp, vertical = 2.dp),
+    ) {
+        Text(letter, color = Style.dim, fontSize = Style.letterSize, fontFamily = FontFamily.Monospace)
+        HorizontalDivider(
+            thickness = 0.5.dp,
+            color = Style.dim.copy(alpha = 0.3f),
+            modifier = Modifier.weight(1f).padding(horizontal = 10.dp),
+        )
+        Text(letter, color = Style.dim, fontSize = Style.letterSize, fontFamily = FontFamily.Monospace)
+    }
 }
 
 @Composable

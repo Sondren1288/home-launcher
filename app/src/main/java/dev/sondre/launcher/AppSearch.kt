@@ -111,6 +111,41 @@ object AppSearch {
 
     data class GroupSection<T>(val group: AppGroup, val apps: List<T>)
 
+    private val nordicLetters = setOf('Æ', 'Ø', 'Å')
+
+    /**
+     * The letter an app is filed under in the A–Z list: the first character, uppercased, with
+     * accents stripped (É → E) except for Æ/Ø/Å, which sort as their own letters. Anything that
+     * isn't a letter goes under "#".
+     */
+    fun letterOf(label: String): String {
+        val c = label.trim().firstOrNull()?.uppercaseChar() ?: return "#"
+        if (!c.isLetter()) return "#"
+        if (c in nordicLetters) return c.toString()
+        return normalize(c.toString()).uppercase().ifEmpty { c.toString() }
+    }
+
+    /** An entry in a list with letter dividers: either a divider or an item. */
+    sealed interface Lettered<out T> {
+        data class Divider(val letter: String) : Lettered<Nothing>
+        data class Item<T>(val item: T) : Lettered<T>
+    }
+
+    /** Insert a divider before every run of items filed under a new letter (including the first). */
+    fun <T> withLetterDividers(items: List<T>, label: (T) -> String): List<Lettered<T>> {
+        val out = ArrayList<Lettered<T>>(items.size + 30)
+        var last: String? = null
+        for (item in items) {
+            val letter = letterOf(label(item))
+            if (letter != last) {
+                out += Lettered.Divider(letter)
+                last = letter
+            }
+            out += Lettered.Item(item)
+        }
+        return out
+    }
+
     data class Sections<T>(
         val favorites: List<T>,
         val frequent: List<T>,

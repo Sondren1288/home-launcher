@@ -123,4 +123,26 @@ class AppSearchTest {
     fun `blank query gives no deep results`() {
         assertEquals(emptyList<Any>(), deep(" "))
     }
+
+    @Test
+    fun `letters strip accents but keep Norwegian letters, and non-letters go under hash`() {
+        assertEquals("E", AppSearch.letterOf("Éclair"))
+        assertEquals("A", AppSearch.letterOf(" aimo"))
+        assertEquals("Å", AppSearch.letterOf("åpent"))
+        assertEquals("Ø", AppSearch.letterOf("Østlandet"))
+        assertEquals("#", AppSearch.letterOf("1Password"))
+        assertEquals("#", AppSearch.letterOf(""))
+    }
+
+    @Test
+    fun `a divider goes before each new letter, including the first`() {
+        val list = AppSearch.withLetterDividers(listOf("1Password", "Autopay", "Azur Lane", "BankID", "Bolt"), { it })
+        val rendered = list.map {
+            when (it) {
+                is AppSearch.Lettered.Divider -> "-${it.letter}-"
+                is AppSearch.Lettered.Item -> it.item
+            }
+        }
+        assertEquals(listOf("-#-", "1Password", "-A-", "Autopay", "Azur Lane", "-B-", "BankID", "Bolt"), rendered)
+    }
 }
