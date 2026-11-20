@@ -197,6 +197,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 onRemoveFromGroup = { vm.moveToGroup(app, null) },
                 onAppInfo = { vm.openAppInfo(app) },
                 onUninstall = { vm.uninstall(app) },
+                onRemoveShortcut = { vm.removeShortcut(app) },
             )
         }
         val row: @Composable (AppEntry) -> Unit = { appRow(it, 0.dp) }
@@ -628,6 +629,7 @@ private fun AppRow(
     onRemoveFromGroup: () -> Unit,
     onAppInfo: () -> Unit,
     onUninstall: () -> Unit,
+    onRemoveShortcut: () -> Unit,
     /** Extra start padding, for apps shown inside an open group. */
     indent: Dp = 0.dp,
 ) {
@@ -669,8 +671,13 @@ private fun AppRow(
                 add(MenuAction(if (isFavorite) "Remove from favorites" else "Add to favorites", onToggleFavorite))
                 add(MenuAction(if (group == null) "Move to group…" else "Move to another group…", onPickGroup))
                 if (group != null) add(MenuAction("Remove from \"${group.name}\"", onRemoveFromGroup))
-                add(MenuAction("App info", onAppInfo))
-                add(MenuAction("Uninstall", onUninstall))
+                if (app.isShortcut) {
+                    // A pinned shortcut / web app: it has no app info or uninstall of its own.
+                    add(MenuAction("Remove from launcher", onRemoveShortcut))
+                } else {
+                    add(MenuAction("App info", onAppInfo))
+                    add(MenuAction("Uninstall", onUninstall))
+                }
             },
         )
     }

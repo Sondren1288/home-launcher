@@ -45,8 +45,10 @@ data class SubEntry(val id: String, val label: String, val ownerKey: String, val
 
 /** Attach each item to the app it belongs to; items whose app isn't in [apps] are dropped. */
 fun attachToApps(items: List<RawSubItem>, apps: List<AppEntry>): List<SubEntry> {
-    val byComponent = apps.associateBy { it.component to it.user }
-    val byPackage = apps.groupBy { it.component.packageName to it.user }
+    // Pinned shortcuts share their publisher's component; never attach children to them.
+    val real = apps.filterNot { it.isShortcut }
+    val byComponent = real.associateBy { it.component to it.user }
+    val byPackage = real.groupBy { it.component.packageName to it.user }
     return items.mapNotNull { item ->
         val owner = item.component?.let { byComponent[it to item.user] }
             ?: byPackage[item.packageName to item.user]?.firstOrNull()
@@ -68,8 +70,8 @@ class SubItemSource(private val context: Context) {
     fun loadShortcuts(): List<RawSubItem> {
         if (!runCatching { launcherApps.hasShortcutHostPermission() }.getOrDefault(false)) return emptyList()
         var flags = LauncherApps.ShortcutQuery.FLAG_MATCH_DYNAMIC or
-            LauncherApps.ShortcutQuery.FLAG_MATCH_MANIFEST or
-            LauncherApps.ShortcutQuery.FLAG_MATCH_PINNED
+            LauncherApps.ShortcutQuery.FLAG_MATCH_MANIFEST
+        // Pinned shortcuts are left out on purpose: they're listed as apps of their own.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             // Conversation shortcuts kept around by the system (recent chats).
             flags = flags or LauncherApps.ShortcutQuery.FLAG_MATCH_CACHED

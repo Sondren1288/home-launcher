@@ -18,6 +18,7 @@ import android.os.Looper
 import android.os.Process
 import android.os.UserHandle
 import android.os.UserManager
+import android.util.Log
 import android.util.LruCache
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
@@ -26,12 +27,19 @@ import java.text.Collator
 import java.util.concurrent.ConcurrentHashMap
 
 data class AppEntry(
-    /** Stable id: component + user serial, so work-profile copies are distinct. */
+    /** Stable id: component (or pinned shortcut id) + user serial, so work-profile copies are distinct. */
     val key: String,
     val label: String,
     val component: ComponentName,
     val user: UserHandle,
-)
+    /**
+     * Set for pinned shortcuts shown as apps, e.g. web apps added from Firefox with
+     * "Add to home screen". [component] is then the publishing app's activity.
+     */
+    val shortcut: ShortcutInfo? = null,
+) {
+    val isShortcut get() = shortcut != null
+}
 
 class AppRepository(private val context: Context) {
 
@@ -40,7 +48,10 @@ class AppRepository(private val context: Context) {
     private val infos = ConcurrentHashMap<String, LauncherActivityInfo>()
     private val icons = LruCache<String, ImageBitmap>(400)
 
-    /** All launchable activities across the user's profiles (incl. work profile), A–Z. */
+    /**
+     * All launchable activities across the user's profiles (incl. work profile), plus the
+     * shortcuts pinned to this launcher (web apps), A–Z.
+     */
     fun loadApps(): List<AppEntry> {
         val collator = Collator.getInstance().apply { strength = Collator.PRIMARY }
         val result = mutableListOf<AppEntry>()
@@ -53,16 +64,65 @@ class AppRepository(private val context: Context) {
                 infos[key] = info
                 result += AppEntry(key, info.label.toString(), info.componentName, user)
             }
+            result += pinnedShortcuts(user, serial)
         }
         return result.sortedWith(compareBy(collator) { it.label })
     }
 
+    /** Shortcuts pinned to *this* launcher. Android doesn't let us see other launchers' pins. */
+    private fun pinnedShortcuts(user: UserHandle, serial: Long): List<AppEntry> {
+        if (!hasShortcutAccess()) return emptyList()
+        val query = LauncherApps.ShortcutQuery().setQueryFlags(LauncherApps.ShortcutQuery.FLAG_MATCH_PINNED)
+        val shortcuts = runCatching { launcherApps.getShortcuts(query, user) }
+            .onFailure { Log.w(TAG, "pinned shortcuts failed for $user", it) }
+            .getOrNull().orEmpty()
+        return shortcuts.filter { it.isEnabled && it.isPinned }.mapNotNull { s ->
+            val label = (s.shortLabel ?: s.longLabel)?.toString()?.trim()
+            if (label.isNullOrEmpty()) return@mapNotNull null
+            AppEntry(
+                key = "pin:${s.`package`}/${s.id}#$serial",
+                label = label,
+                component = s.activity ?: ComponentName(s.`package`, ""),
+                user = user,
+                shortcut = s,
+            )
+        }
+    }
+
+    private fun hasShortcutAccess() = runCatching { launcherApps.hasShortcutHostPermission() }.getOrDefault(false)
+
     fun launch(app: AppEntry, sourceBounds: Rect? = null) {
-        launcherApps.startMainActivity(app.component, app.user, sourceBounds, null)
+        val s = app.shortcut
+        if (s != null) {
+            launcherApps.startShortcut(s, sourceBounds, null)
+        } else {
+            launcherApps.startMainActivity(app.component, app.user, sourceBounds, null)
+        }
+    }
+
+    /** Unpin a shortcut entry (it disappears from the launcher; the publishing app is untouched). */
+    fun removeShortcut(app: AppEntry) {
+        val s = app.shortcut ?: return
+        val query = LauncherApps.ShortcutQuery()
+            .setPackage(s.`package`)
+            .setQueryFlags(LauncherApps.ShortcutQuery.FLAG_MATCH_PINNED)
+        val keep = launcherApps.getShortcuts(query, app.user).orEmpty()
+            .filter { it.isPinned && it.id != s.id }
+            .map { it.id }
+        // pinShortcuts replaces this launcher's whole pinned set for the package.
+        launcherApps.pinShortcuts(s.`package`, keep, app.user)
     }
 
     fun openAppInfo(app: AppEntry) {
-        launcherApps.startAppDetailsActivity(app.component, app.user, null, null)
+        if (app.isShortcut) {
+            // No app of its own: show the publishing app (e.g. Firefox) instead.
+            context.startActivity(
+                Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", app.component.packageName, null))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        } else {
+            launcherApps.startAppDetailsActivity(app.component, app.user, null, null)
+        }
     }
 
     fun uninstall(app: AppEntry) {
@@ -78,8 +138,9 @@ class AppRepository(private val context: Context) {
     fun loadIcon(app: AppEntry, sizePx: Int): ImageBitmap? {
         val cacheKey = "${app.key}@$sizePx"
         icons.get(cacheKey)?.let { return it }
-        val info = infos[app.key] ?: return null
-        val raw = info.getIcon(0) ?: return null
+        val raw = app.shortcut?.let { s ->
+            runCatching { launcherApps.getShortcutIconDrawable(s, context.resources.displayMetrics.densityDpi) }.getOrNull()
+        } ?: infos[app.key]?.getIcon(0) ?: return null
         var bitmap = renderSquare(raw, sizePx)
         if (app.user != Process.myUserHandle()) {
             // Add the briefcase badge for work-profile apps.
@@ -136,4 +197,8 @@ class AppRepository(private val context: Context) {
     }
 
     fun unregisterCallback(callback: LauncherApps.Callback) = launcherApps.unregisterCallback(callback)
+
+    private companion object {
+        const val TAG = "AppRepository"
+    }
 }

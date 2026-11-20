@@ -123,7 +123,8 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
 
     private val callback = repository.registerCallback(
         onChange = { reload(); reloadShortcuts() },
-        onShortcutsChanged = { reloadShortcuts() },
+        // Pinned shortcuts (web apps) are listed as apps, so reload those too.
+        onShortcutsChanged = { reload(); reloadShortcuts() },
     )
 
     private var contactsReloadJob: Job? = null
@@ -153,6 +154,7 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Called from Activity.onStart: permissions or the default-launcher role may have changed. */
     fun onStart() {
+        reload() // pinned shortcuts only become visible once we're the default launcher
         reloadShortcuts()
         val granted = subSource.hasContactsPermission()
         _showContactsPrompt.value = !granted && !usage.contactsPromptDismissed
@@ -211,7 +213,15 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
             reload()
         } catch (e: SecurityException) {
             toast("Couldn't open ${app.label}")
+        } catch (e: IllegalStateException) { // pinned shortcut gone / user locked
+            toast("Couldn't open ${app.label}")
+            reload()
         }
+    }
+
+    fun removeShortcut(app: AppEntry) {
+        runCatching { repository.removeShortcut(app) }.onFailure { toast("Couldn't remove ${app.label}") }
+        reload()
     }
 
     fun launchSub(sub: SubEntry) {

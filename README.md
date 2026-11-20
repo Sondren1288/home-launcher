@@ -28,6 +28,10 @@ A minimal Android home screen: collapsible sections — **Favorites**, **Most us
 - Long-press menus and dialogs are wide (90% of the screen) with sharp corners.
 - Pressing Home while the launcher is showing clears the search, collapses everything and scrolls to the top.
 - Back never leaves the launcher.
+- **Web apps / "Add to home screen"** (e.g. Firefox): the launcher accepts these pin requests and lists
+  them in All apps like any app (favorites, groups, search all work). Long-press → "Remove from launcher".
+  Android only shows a launcher the shortcuts pinned *to it*, so ones added while another launcher was
+  the default have to be added again from the browser.
 - Work-profile apps are included and shown with the briefcase badge.
 - Apps that are installed, removed or updated show up right away.
 - "Most used" comes from launch counts the launcher records itself, so no special permission is needed.
