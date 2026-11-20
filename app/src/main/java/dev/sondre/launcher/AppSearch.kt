@@ -2,6 +2,9 @@ package dev.sondre.launcher
 
 import java.text.Normalizer
 
+/** A user-made folder. An app belongs to at most one group. */
+data class AppGroup(val id: String, val name: String, val appKeys: List<String>)
+
 /**
  * Pure, Android-free search and grouping logic so it can be unit tested on the JVM.
  */
@@ -59,16 +62,74 @@ object AppSearch {
             .sortedWith(compareBy<Triple<T, Int, Int>> { it.second }.thenByDescending { it.third })
             .map { it.first }
 
-    data class Sections<T>(val favorites: List<T>, val frequent: List<T>, val all: List<T>)
+    /** An app in the search results, with matching sub-items (chats, contacts…) beneath it. */
+    data class Match<T, C>(val item: T, val children: List<C>, val matchedItself: Boolean)
 
     /**
+     * Search apps and their sub-items together. An app is included if its own label matches
+     * or any of its children match; it ranks by the better of the two. On equal rank, apps
+     * matching by their own name come first, then higher [boost], then input order.
+     *
+     * Children only match on prefix / word prefix / initials ([childMaxScore]) so a large
+     * contact list doesn't flood the results with loose matches.
+     */
+    fun <T, C> searchWithChildren(
+        items: List<T>,
+        children: List<C>,
+        query: String,
+        label: (T) -> String,
+        key: (T) -> String,
+        childLabel: (C) -> String,
+        childOwner: (C) -> String,
+        boost: (T) -> Int = { 0 },
+        childMaxScore: Int = 2,
+        childLimit: Int = 5,
+    ): List<Match<T, C>> {
+        if (query.isBlank()) return emptyList()
+        val kids: Map<String, List<Pair<C, Int>>> = children
+            .mapNotNull { c -> score(childLabel(c), query)?.takeIf { it <= childMaxScore }?.let { c to it } }
+            .groupBy { childOwner(it.first) }
+            .mapValues { (_, v) ->
+                v.sortedWith(compareBy<Pair<C, Int>> { it.second }.thenBy { normalize(childLabel(it.first)) })
+            }
+
+        data class Ranked(val match: Match<T, C>, val rank: Int, val boost: Int)
+        return items.mapNotNull { item ->
+            val own = score(label(item), query)
+            val mine = kids[key(item)].orEmpty()
+            if (own == null && mine.isEmpty()) return@mapNotNull null
+            val rank = minOf(own ?: Int.MAX_VALUE, mine.firstOrNull()?.second ?: Int.MAX_VALUE)
+            Ranked(Match(item, mine.take(childLimit).map { it.first }, own != null), rank, boost(item))
+        }
+            .sortedWith(
+                compareBy<Ranked> { it.rank }
+                    .thenBy { if (it.match.matchedItself) 0 else 1 }
+                    .thenByDescending { it.boost }
+            )
+            .map { it.match }
+    }
+
+    data class GroupSection<T>(val group: AppGroup, val apps: List<T>)
+
+    data class Sections<T>(
+        val favorites: List<T>,
+        val frequent: List<T>,
+        val groups: List<GroupSection<T>>,
+        /** Apps not in any group. */
+        val ungrouped: List<T>,
+    )
+
+    /**
+     * @param all every app, alphabetical; group members keep this order
      * @param favoriteKeys favorites in user-defined order
+     * @param groups groups in user-defined order; keys of uninstalled apps are skipped
      * @param counts launch count per key
      */
     fun <T> sections(
         all: List<T>,
         key: (T) -> String,
         favoriteKeys: List<String>,
+        groups: List<AppGroup>,
         counts: Map<String, Int>,
         frequentLimit: Int,
     ): Sections<T> {
@@ -79,6 +140,17 @@ object AppSearch {
             .filter { key(it) !in favSet && (counts[key(it)] ?: 0) > 0 }
             .sortedByDescending { counts[key(it)] ?: 0 } // stable: ties stay alphabetical
             .take(frequentLimit)
-        return Sections(favorites, frequent, all)
+
+        // First group wins if a key somehow ended up in two groups.
+        val groupOf = HashMap<String, String>()
+        for (g in groups) for (k in g.appKeys) groupOf.putIfAbsent(k, g.id)
+        val members = all.filter { key(it) in groupOf }.groupBy { groupOf.getValue(key(it)) }
+
+        return Sections(
+            favorites = favorites,
+            frequent = frequent,
+            groups = groups.map { GroupSection(it, members[it.id].orEmpty()) },
+            ungrouped = all.filter { key(it) !in groupOf },
+        )
     }
 }

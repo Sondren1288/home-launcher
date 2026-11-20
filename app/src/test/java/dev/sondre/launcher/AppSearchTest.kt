@@ -50,9 +50,77 @@ class AppSearchTest {
     @Test
     fun `sections keep favorite order and exclude favorites from frequent`() {
         val counts = mapOf("Yr" to 3, "Gmail" to 9, "Camera" to 1, "Ruter" to 3)
-        val s = AppSearch.sections(apps, { it }, favoriteKeys = listOf("Ruter", "Calendar", "Uninstalled"), counts, frequentLimit = 2)
+        val s = AppSearch.sections(apps, { it }, listOf("Ruter", "Calendar", "Uninstalled"), emptyList(), counts, frequentLimit = 2)
         assertEquals(listOf("Ruter", "Calendar"), s.favorites)
         assertEquals(listOf("Gmail", "Yr"), s.frequent)
-        assertEquals(apps, s.all)
+        assertEquals(apps, s.ungrouped)
+    }
+
+    @Test
+    fun `groups keep their order, members are alphabetical, and are removed from ungrouped`() {
+        val groups = listOf(
+            AppGroup("travel", "Travel", listOf("Ruter", "Google Maps", "Uninstalled")),
+            AppGroup("empty", "Empty", emptyList()),
+            AppGroup("photo", "Photo", listOf("Camera", "Ruter")), // Ruter already in Travel
+        )
+        val s = AppSearch.sections(apps, { it }, emptyList(), groups, emptyMap(), frequentLimit = 5)
+        assertEquals(listOf("Travel", "Empty", "Photo"), s.groups.map { it.group.name })
+        assertEquals(listOf("Google Maps", "Ruter"), s.groups[0].apps)
+        assertEquals(emptyList<String>(), s.groups[1].apps)
+        assertEquals(listOf("Camera"), s.groups[2].apps)
+        assertEquals(listOf("Calculator", "Calendar", "Gmail", "Maps.me", "Yr"), s.ungrouped)
+    }
+
+    @Test
+    fun `favorites and frequent still include grouped apps`() {
+        val groups = listOf(AppGroup("g", "G", listOf("Gmail", "Yr")))
+        val s = AppSearch.sections(apps, { it }, listOf("Yr"), groups, mapOf("Gmail" to 2), frequentLimit = 5)
+        assertEquals(listOf("Yr"), s.favorites)
+        assertEquals(listOf("Gmail"), s.frequent)
+    }
+
+    // children: (owner app, label)
+    private val subs = listOf(
+        "WhatsApp" to "Dorian Gray", "WhatsApp" to "Anna", "Contacts" to "Dorian Gray",
+        "Contacts" to "Dora", "Contacts" to "Isidor", "Chrome" to "New incognito tab",
+    )
+    private val withSubs = listOf("Chrome", "Contacts", "Dodo", "WhatsApp")
+
+    private fun deep(q: String, boost: (String) -> Int = { 0 }) = AppSearch.searchWithChildren(
+        withSubs, subs, q, label = { it }, key = { it },
+        childLabel = { it.second }, childOwner = { it.first }, boost = boost,
+    ).map { m -> m.item to m.children.map { it.second } }
+
+    @Test
+    fun `children appear under their app, and the app is shown even if only a child matches`() {
+        assertEquals(
+            listOf("Contacts" to listOf("Dorian Gray"), "WhatsApp" to listOf("Dorian Gray")),
+            deep("dorian"),
+        )
+    }
+
+    @Test
+    fun `apps matching by name come before apps matching only through children`() {
+        assertEquals(
+            listOf("Dodo" to emptyList(), "Contacts" to listOf("Dora", "Dorian Gray"), "WhatsApp" to listOf("Dorian Gray")),
+            deep("do"),
+        )
+    }
+
+    @Test
+    fun `children only match on prefixes, not inside words`() {
+        // "dor" is inside "Isidor" but that's not a prefix, so only Dora and Dorian match.
+        assertEquals(listOf("Dora", "Dorian Gray"), deep("dor").first { it.first == "Contacts" }.second)
+        assertEquals(listOf("Chrome" to listOf("New incognito tab")), deep("incog"))
+    }
+
+    @Test
+    fun `boost orders apps that rank equally`() {
+        assertEquals(listOf("WhatsApp", "Contacts"), deep("dorian") { if (it == "WhatsApp") 5 else 0 }.map { it.first })
+    }
+
+    @Test
+    fun `blank query gives no deep results`() {
+        assertEquals(emptyList<Any>(), deep(" "))
     }
 }

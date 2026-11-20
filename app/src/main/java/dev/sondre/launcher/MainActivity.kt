@@ -29,6 +29,11 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        viewModel.onStart()
+    }
+
     /** Home pressed while we're already in front: reset to a clean state. */
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)

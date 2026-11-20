@@ -1,13 +1,23 @@
 # home-launcher
 
-A minimal Android home screen: search bar on top, then **Favorites**, **Most used**, and
-**All apps (A–Z)** as a plain list of `[square icon] App name` rows over the wallpaper.
+A minimal Android home screen: collapsible sections — **Favorites**,
+**Most used**, your **groups**, and **Other apps (A–Z)** — as a plain list of
+`[square icon] App name` rows over the wallpaper, with a full-width search bar at the bottom.
 
-- Type to filter. Matching ignores case and accents and ranks: prefix > word prefix > initials
+- Every section starts collapsed; tap a header (or its ⌄ arrow) to expand it.
+- Type to filter. Search covers all apps, regardless of what's collapsed. Matching ignores case and accents and ranks: prefix > word prefix > initials
   (`gm` → Google Maps) > substring > subsequence. Ties go to the app you launch most.
   Press Go/Enter on the keyboard to open the top result.
-- Long-press an app to add or remove it from favorites, open App info, or uninstall it.
-- Pressing Home while the launcher is showing clears the search and scrolls to the top.
+- Search also finds things *inside* apps and shows them indented under the app they belong to
+  (`dorian` → WhatsApp / Dorian, opening that chat):
+  - **App shortcuts** (recent chats, "New incognito tab"…). Needs this to be the default home app.
+  - **Contacts** (optional; asked for in the search results): every contact under the Contacts app,
+    plus the actions apps attach to contacts (WhatsApp, Signal, Telegram…) under those apps.
+  These only match on name/word prefixes, to keep a big contact list from flooding the results.
+- Long-press an app to add or remove it from favorites, move it to a group (or a new one), open App info, or uninstall it.
+  An app is in at most one group; grouped apps leave "Other apps" but can still be favorites.
+- Long-press a group header to rename, reorder or delete it (its apps return to "Other apps").
+- Pressing Home while the launcher is showing clears the search, collapses everything and scrolls to the top.
 - Back never leaves the launcher.
 - Work-profile apps are included and shown with the briefcase badge.
 - Apps that are installed, removed or updated show up right away.
@@ -19,7 +29,8 @@ A minimal Android home screen: search bar on top, then **Favorites**, **Most use
 |---|---|
 | `app/src/main/java/dev/sondre/launcher/AppSearch.kt` | Pure ranking and sections logic (unit tested) |
 | `.../AppRepository.kt` | App list (`LauncherApps`), launching, square icon rendering, change callbacks |
-| `.../UsageStore.kt` | Favorites and launch counts (SharedPreferences) |
+| `.../UsageStore.kt` | Favorites, groups and launch counts (SharedPreferences) |
+| `.../SubItems.kt` | In-app search sources: app shortcuts and contacts, and launching them |
 | `.../LauncherViewModel.kt` | Combines the above into `UiState` |
 | `.../LauncherScreen.kt` | Compose UI. Tweak sizes and colors in `Style` at the top |
 | `.../MainActivity.kt` | HOME activity, edge-to-edge, Home-press reset |

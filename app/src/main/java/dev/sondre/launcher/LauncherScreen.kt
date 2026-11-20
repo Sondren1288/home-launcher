@@ -1,32 +1,50 @@
 package dev.sondre.launcher
 
+import android.Manifest
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
@@ -38,8 +56,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.ImeAction
@@ -55,84 +75,201 @@ private object Style {
     val iconSize = 24.dp
     val rowVerticalPadding = 7.dp
     val labelSize = 16.sp
+    val subLabelSize = 15.sp
     val scrim = Color.Black.copy(alpha = 0.55f)
     val text = Color.White
     val dim = Color.White.copy(alpha = 0.55f)
+    val searchBar = Color.White.copy(alpha = 0.10f)
+}
+
+/** Dialogs opened from long-press menus. */
+private sealed interface DialogState {
+    data class PickGroup(val app: AppEntry) : DialogState
+    data class RenameGroup(val group: AppGroup) : DialogState
+    data class DeleteGroup(val group: AppGroup) : DialogState
 }
 
 @Composable
 fun LauncherScreen(vm: LauncherViewModel) {
     val state by vm.state.collectAsStateWithLifecycle()
+    val showContactsPrompt by vm.showContactsPrompt.collectAsStateWithLifecycle()
+    val contactsPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+        vm.onContactsPermissionResult(it)
+    }
     val listState = rememberLazyListState()
     val focusManager = LocalFocusManager.current
+    var dialog by remember { mutableStateOf<DialogState?>(null) }
 
     LaunchedEffect(Unit) {
         vm.resetEvents.collect {
             focusManager.clearFocus()
+            dialog = null
             listState.scrollToItem(0)
         }
     }
 
     // A launcher must never "go back" anywhere; back only clears search / hides the keyboard.
     BackHandler {
-        if (state.query.isNotEmpty()) vm.setQuery("") else focusManager.clearFocus()
+        if (vm.query.isNotEmpty()) vm.updateQuery("") else focusManager.clearFocus()
     }
 
     Column(
         Modifier
             .fillMaxSize()
             .background(Style.scrim)
-            .systemBarsPadding()
-            .imePadding()
+            .statusBarsPadding()
     ) {
-        SearchField(
-            query = state.query,
-            onQueryChange = vm::setQuery,
-            onGo = vm::launchTopResult,
-        )
-
         val row: @Composable (AppEntry) -> Unit = { app ->
             AppRow(
                 app = app,
                 isFavorite = app.key in state.favoriteKeys,
+                group = state.groupOfApp[app.key],
                 loadIcon = { a, px -> withContext(Dispatchers.IO) { vm.repository.loadIcon(a, px) } },
                 cachedIcon = vm.repository::cachedIcon,
                 onClick = { vm.launch(app) },
                 onToggleFavorite = { vm.toggleFavorite(app) },
+                onPickGroup = { dialog = DialogState.PickGroup(app) },
+                onRemoveFromGroup = { vm.moveToGroup(app, null) },
                 onAppInfo = { vm.openAppInfo(app) },
                 onUninstall = { vm.uninstall(app) },
             )
         }
 
-        LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
+        LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth()) {
             if (state.isSearching) {
                 if (state.results.isEmpty()) {
                     item { Hint("No apps match \"${state.query}\"") }
                 }
-                section("results", null, state.results, row)
-            } else {
-                if (state.favorites.isEmpty()) {
-                    item(key = "fav-hint") { Header("Favorites"); Hint("Long-press an app to add it here") }
-                } else {
-                    section("fav", "Favorites", state.favorites, row)
+                for (r in state.results) {
+                    item(key = "res:${r.item.key}") { row(r.item) }
+                    items(r.children, key = { "res:${r.item.key}:${it.id}" }) { sub ->
+                        SubRow(sub.label, onClick = { vm.launchSub(sub) })
+                    }
                 }
-                section("freq", "Most used", state.frequent, row)
-                section("all", "All apps", state.all, row)
+                if (showContactsPrompt) {
+                    item(key = "contacts-prompt") {
+                        ContactsPrompt(
+                            onAllow = { contactsPermission.launch(Manifest.permission.READ_CONTACTS) },
+                            onDismiss = vm::dismissContactsPrompt,
+                        )
+                    }
+                }
+            } else {
+                section(
+                    id = SectionId.FAVORITES, title = "Favorites", apps = state.favorites,
+                    state = state, onToggle = vm::toggleSection, row = row,
+                    emptyHint = "Long-press an app to add it here",
+                )
+                if (state.frequent.isNotEmpty()) {
+                    section(
+                        id = SectionId.FREQUENT, title = "Most used", apps = state.frequent,
+                        state = state, onToggle = vm::toggleSection, row = row,
+                    )
+                }
+                val groups = state.groups
+                groups.forEachIndexed { index, (group, apps) ->
+                    section(
+                        id = SectionId.group(group.id), title = group.name, apps = apps,
+                        state = state, onToggle = vm::toggleSection, row = row,
+                        emptyHint = "Long-press an app and choose \"Move to group\"",
+                        menu = { close ->
+                            DropdownMenuItem(
+                                text = { Text("Rename") },
+                                onClick = { close(); dialog = DialogState.RenameGroup(group) },
+                            )
+                            if (index > 0) DropdownMenuItem(
+                                text = { Text("Move up") },
+                                onClick = { close(); vm.moveGroup(group, -1) },
+                            )
+                            if (index < groups.lastIndex) DropdownMenuItem(
+                                text = { Text("Move down") },
+                                onClick = { close(); vm.moveGroup(group, +1) },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Delete group") },
+                                onClick = { close(); dialog = DialogState.DeleteGroup(group) },
+                            )
+                        },
+                    )
+                }
+                section(
+                    id = SectionId.OTHER,
+                    title = if (groups.isEmpty()) "All apps" else "Other apps",
+                    apps = state.ungrouped,
+                    state = state, onToggle = vm::toggleSection, row = row,
+                )
             }
         }
+
+        // Full-width, square bar at the bottom. Its background runs under the navigation bar,
+        // and it rides on top of the keyboard when that's open.
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .background(Style.searchBar)
+                .navigationBarsPadding()
+                .imePadding()
+        ) {
+            SearchField(
+                query = vm.query,
+                onQueryChange = vm::updateQuery,
+                onGo = vm::launchTopResult,
+            )
+        }
+    }
+
+    when (val d = dialog) {
+        null -> {}
+        is DialogState.PickGroup -> GroupPickerDialog(
+            app = d.app,
+            groups = state.groups.map { it.group },
+            current = state.groupOfApp[d.app.key],
+            onPick = { vm.moveToGroup(d.app, it.id); dialog = null },
+            onCreate = { vm.moveToNewGroup(d.app, it); dialog = null },
+            onDismiss = { dialog = null },
+        )
+        is DialogState.RenameGroup -> NameDialog(
+            title = "Rename group",
+            initial = d.group.name,
+            confirmLabel = "Rename",
+            onConfirm = { vm.renameGroup(d.group, it); dialog = null },
+            onDismiss = { dialog = null },
+        )
+        is DialogState.DeleteGroup -> AlertDialog(
+            onDismissRequest = { dialog = null },
+            title = { Text("Delete \"${d.group.name}\"?") },
+            text = { Text("The apps in it go back to the main list. They are not uninstalled.") },
+            confirmButton = {
+                TextButton(onClick = { vm.deleteGroup(d.group); dialog = null }) { Text("Delete") }
+            },
+            dismissButton = { TextButton(onClick = { dialog = null }) { Text("Cancel") } },
+        )
     }
 }
 
-/** Keys are prefixed per section because an app can appear in several sections. */
+/**
+ * A collapsible section: header row with a chevron, and the apps when expanded.
+ * Item keys are prefixed with the section id because an app can appear in several sections.
+ */
 private fun LazyListScope.section(
-    prefix: String,
-    title: String?,
+    id: String,
+    title: String,
     apps: List<AppEntry>,
+    state: UiState,
+    onToggle: (String) -> Unit,
     row: @Composable (AppEntry) -> Unit,
+    emptyHint: String? = null,
+    menu: (@Composable ColumnScope.(close: () -> Unit) -> Unit)? = null,
 ) {
-    if (apps.isEmpty()) return
-    if (title != null) item(key = "$prefix-header") { Header(title) }
-    items(apps, key = { "$prefix:${it.key}" }) { row(it) }
+    val expanded = id in state.expanded
+    item(key = "header:$id") {
+        SectionHeader(title, apps.size, expanded, onToggle = { onToggle(id) }, menu = menu)
+    }
+    if (!expanded) return
+    if (apps.isEmpty() && emptyHint != null) {
+        item(key = "hint:$id") { Hint(emptyHint) }
+    }
+    items(apps, key = { "$id:${it.key}" }) { row(it) }
 }
 
 @Composable
@@ -140,34 +277,71 @@ private fun SearchField(query: String, onQueryChange: (String) -> Unit, onGo: ()
     TextField(
         value = query,
         onValueChange = onQueryChange,
-        placeholder = { Text("Search apps", color = Style.dim) },
+        leadingIcon = { Icon(Icons.Filled.Search, contentDescription = "Search apps", tint = Style.dim) },
         singleLine = true,
-        shape = RoundedCornerShape(8.dp),
+        shape = RectangleShape,
         keyboardOptions = KeyboardOptions(autoCorrectEnabled = false, imeAction = ImeAction.Go),
         keyboardActions = KeyboardActions(onGo = { onGo() }),
         colors = TextFieldDefaults.colors(
-            focusedContainerColor = Color.White.copy(alpha = 0.12f),
-            unfocusedContainerColor = Color.White.copy(alpha = 0.08f),
+            focusedContainerColor = Color.Transparent,
+            unfocusedContainerColor = Color.Transparent,
             focusedIndicatorColor = Color.Transparent,
             unfocusedIndicatorColor = Color.Transparent,
             focusedTextColor = Style.text,
             unfocusedTextColor = Style.text,
+            cursorColor = Style.text,
         ),
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 12.dp),
+        modifier = Modifier.fillMaxWidth(),
     )
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun Header(title: String) {
-    Text(
-        text = title.uppercase(),
-        color = Style.dim,
-        fontSize = 12.sp,
-        letterSpacing = 1.sp,
-        modifier = Modifier.padding(start = 20.dp, top = 16.dp, bottom = 4.dp),
-    )
+private fun SectionHeader(
+    title: String,
+    count: Int,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    menu: (@Composable ColumnScope.(close: () -> Unit) -> Unit)?,
+) {
+    var menuOpen by remember { mutableStateOf(false) }
+    val rotation by animateFloatAsState(if (expanded) 180f else 0f, label = "chevron")
+    Box {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .combinedClickable(
+                    onClick = onToggle,
+                    onLongClick = if (menu != null) ({ menuOpen = true }) else null,
+                )
+                .padding(start = 20.dp, end = 16.dp, top = 14.dp, bottom = 6.dp),
+        ) {
+            Text(
+                text = title.uppercase(),
+                color = Style.dim,
+                fontSize = 12.sp,
+                letterSpacing = 1.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(text = count.toString(), color = Style.dim.copy(alpha = 0.35f), fontSize = 12.sp)
+            Spacer(Modifier.weight(1f))
+            Icon(
+                imageVector = Icons.Filled.KeyboardArrowDown,
+                contentDescription = if (expanded) "Collapse" else "Expand",
+                tint = Style.dim,
+                modifier = Modifier.size(20.dp).rotate(rotation),
+            )
+        }
+        if (menu != null) {
+            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                menu { menuOpen = false }
+            }
+        }
+    }
 }
 
 @Composable
@@ -180,15 +354,46 @@ private fun Hint(text: String) {
     )
 }
 
+/** A chat, contact or shortcut, indented under its app so it lines up with the app's name. */
+@Composable
+private fun SubRow(label: String, onClick: () -> Unit) {
+    Text(
+        text = label,
+        color = Style.text.copy(alpha = 0.85f),
+        fontSize = Style.subLabelSize,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(start = 20.dp + Style.iconSize + 14.dp, end = 20.dp, top = 5.dp, bottom = 5.dp),
+    )
+}
+
+@Composable
+private fun ContactsPrompt(onAllow: () -> Unit, onDismiss: () -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 12.dp),
+    ) {
+        Text("Also search contacts?", color = Style.dim, fontSize = 14.sp, modifier = Modifier.weight(1f))
+        TextButton(onClick = onDismiss) { Text("No thanks", color = Style.dim) }
+        TextButton(onClick = onAllow) { Text("Allow") }
+    }
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun AppRow(
     app: AppEntry,
     isFavorite: Boolean,
+    group: AppGroup?,
     loadIcon: suspend (AppEntry, Int) -> ImageBitmap?,
     cachedIcon: (AppEntry, Int) -> ImageBitmap?,
     onClick: () -> Unit,
     onToggleFavorite: () -> Unit,
+    onPickGroup: () -> Unit,
+    onRemoveFromGroup: () -> Unit,
     onAppInfo: () -> Unit,
     onUninstall: () -> Unit,
 ) {
@@ -227,8 +432,95 @@ private fun AppRow(
                 text = { Text(if (isFavorite) "Remove from favorites" else "Add to favorites") },
                 onClick = { menuOpen = false; onToggleFavorite() },
             )
+            DropdownMenuItem(
+                text = { Text(if (group == null) "Move to group…" else "Move to another group…") },
+                onClick = { menuOpen = false; onPickGroup() },
+            )
+            if (group != null) {
+                DropdownMenuItem(
+                    text = { Text("Remove from \"${group.name}\"") },
+                    onClick = { menuOpen = false; onRemoveFromGroup() },
+                )
+            }
             DropdownMenuItem(text = { Text("App info") }, onClick = { menuOpen = false; onAppInfo() })
             DropdownMenuItem(text = { Text("Uninstall") }, onClick = { menuOpen = false; onUninstall() })
         }
     }
+}
+
+@Composable
+private fun GroupPickerDialog(
+    app: AppEntry,
+    groups: List<AppGroup>,
+    current: AppGroup?,
+    onPick: (AppGroup) -> Unit,
+    onCreate: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var newName by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Move ${app.label} to") },
+        text = {
+            Column {
+                if (groups.isNotEmpty()) {
+                    Column(Modifier.heightIn(max = 280.dp).verticalScroll(rememberScrollState())) {
+                        for (g in groups) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { onPick(g) }
+                                    .padding(vertical = 12.dp),
+                            ) {
+                                Text(g.name, modifier = Modifier.weight(1f))
+                                if (g.id == current?.id) Icon(Icons.Filled.Check, contentDescription = "Current group")
+                            }
+                        }
+                    }
+                    HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                }
+                OutlinedTextField(
+                    value = newName,
+                    onValueChange = { newName = it },
+                    label = { Text("New group") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { if (newName.isNotBlank()) onCreate(newName) }),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(enabled = newName.isNotBlank(), onClick = { onCreate(newName) }) { Text("Create") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun NameDialog(
+    title: String,
+    initial: String,
+    confirmLabel: String,
+    onConfirm: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var name by remember { mutableStateOf(initial) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { if (name.isNotBlank()) onConfirm(name) }),
+            )
+        },
+        confirmButton = {
+            TextButton(enabled = name.isNotBlank(), onClick = { onConfirm(name) }) { Text(confirmLabel) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }

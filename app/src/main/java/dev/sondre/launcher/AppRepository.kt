@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.LauncherActivityInfo
 import android.content.pm.LauncherApps
+import android.content.pm.ShortcutInfo
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Rect
@@ -111,14 +112,19 @@ class AppRepository(private val context: Context) {
         return bitmap
     }
 
-    /** Calls [onChange] on the main thread whenever apps are installed, removed or updated. */
-    fun registerCallback(onChange: () -> Unit): LauncherApps.Callback {
+    /**
+     * Calls [onChange] on the main thread whenever apps are installed, removed or updated,
+     * and [onShortcutsChanged] when an app publishes or removes shortcuts.
+     */
+    fun registerCallback(onChange: () -> Unit, onShortcutsChanged: () -> Unit): LauncherApps.Callback {
         val callback = object : LauncherApps.Callback() {
             override fun onPackageRemoved(packageName: String, user: UserHandle) = changed()
             override fun onPackageAdded(packageName: String, user: UserHandle) = changed()
             override fun onPackageChanged(packageName: String, user: UserHandle) = changed()
             override fun onPackagesAvailable(packageNames: Array<out String>, user: UserHandle, replacing: Boolean) = changed()
             override fun onPackagesUnavailable(packageNames: Array<out String>, user: UserHandle, replacing: Boolean) = changed()
+            override fun onShortcutsChanged(packageName: String, shortcuts: MutableList<ShortcutInfo>, user: UserHandle) =
+                onShortcutsChanged()
 
             private fun changed() {
                 icons.evictAll() // an update may have changed the icon

@@ -3,6 +3,8 @@
 
     <!-- Needed to open the system uninstall dialog. -->
     <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
+    <!-- Optional: search contacts and app actions on them (WhatsApp chats etc.). Asked at runtime. -->
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
 
     <!-- Android 11+ package visibility: without this the app list is nearly empty. -->
     <queries>
