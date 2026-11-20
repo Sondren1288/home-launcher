@@ -37,6 +37,11 @@ data class AppEntry(
      * "Add to home screen". [component] is then the publishing app's activity.
      */
     val shortcut: ShortcutInfo? = null,
+    /**
+     * Another home app (e.g. One UI Home), launched explicitly without changing the default
+     * launcher. Only shown in search results, never in the sections.
+     */
+    val isOtherHome: Boolean = false,
 ) {
     val isShortcut get() = shortcut != null
 }
@@ -66,7 +71,32 @@ class AppRepository(private val context: Context) {
             }
             result += pinnedShortcuts(user, serial)
         }
+        result += otherHomes()
         return result.sortedWith(compareBy(collator) { it.label })
+    }
+
+    /**
+     * The phone's other home apps (One UI Home on Samsung), so search can open them as a
+     * visit: pressing Home comes back here. Skips Settings' FallbackHome (boot placeholder).
+     */
+    private fun otherHomes(): List<AppEntry> {
+        val pm = context.packageManager
+        val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+        val me = Process.myUserHandle()
+        val serial = userManager.getSerialNumberForUser(me)
+        return pm.queryIntentActivities(intent, 0)
+            .map { it.activityInfo }
+            .filter { it.packageName != context.packageName && it.packageName != "com.android.settings" }
+            .map { info ->
+                val component = ComponentName(info.packageName, info.name)
+                AppEntry(
+                    key = "home:${component.flattenToString()}#$serial",
+                    label = info.loadLabel(pm).toString(),
+                    component = component,
+                    user = me,
+                    isOtherHome = true,
+                )
+            }
     }
 
     /** Shortcuts pinned to *this* launcher. Android doesn't let us see other launchers' pins. */
@@ -95,6 +125,13 @@ class AppRepository(private val context: Context) {
         val s = app.shortcut
         if (s != null) {
             launcherApps.startShortcut(s, sourceBounds, null)
+        } else if (app.isOtherHome) {
+            // Not a LAUNCHER activity, so LauncherApps won't start it; an explicit HOME intent will.
+            context.startActivity(
+                Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+                    .setComponent(app.component)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
         } else {
             launcherApps.startMainActivity(app.component, app.user, sourceBounds, null)
         }
@@ -114,8 +151,9 @@ class AppRepository(private val context: Context) {
     }
 
     fun openAppInfo(app: AppEntry) {
-        if (app.isShortcut) {
-            // No app of its own: show the publishing app (e.g. Firefox) instead.
+        if (app.isShortcut || app.isOtherHome) {
+            // Shortcut: no app of its own, so show the publishing app (e.g. Firefox) instead.
+            // Other home app: not a LAUNCHER activity, which startAppDetailsActivity requires.
             context.startActivity(
                 Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", app.component.packageName, null))
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -140,7 +178,9 @@ class AppRepository(private val context: Context) {
         icons.get(cacheKey)?.let { return it }
         val raw = app.shortcut?.let { s ->
             runCatching { launcherApps.getShortcutIconDrawable(s, context.resources.displayMetrics.densityDpi) }.getOrNull()
-        } ?: infos[app.key]?.getIcon(0) ?: return null
+        } ?: infos[app.key]?.getIcon(0)
+            ?: if (app.isOtherHome) runCatching { context.packageManager.getActivityIcon(app.component) }.getOrNull() else null
+        if (raw == null) return null
         var bitmap = renderSquare(raw, sizePx)
         if (app.user != Process.myUserHandle()) {
             // Add the briefcase badge for work-profile apps.

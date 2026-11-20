@@ -839,7 +839,10 @@ private fun AppRow(
         LauncherMenu(
             expanded = menuOpen,
             onDismiss = { menuOpen = false },
-            actions = buildList {
+            actions = if (app.isOtherHome) {
+                // Search-only (One UI Home): favorites/groups would hide it, and it can't be uninstalled.
+                listOf(MenuAction("App info", onAppInfo))
+            } else buildList {
                 add(MenuAction(if (isFavorite) "Remove from favorites" else "Add to favorites", onToggleFavorite))
                 add(MenuAction(if (group == null) "Move to group…" else "Move to another group…", onPickGroup))
                 if (group != null) add(MenuAction("Remove from \"${group.name}\"", onRemoveFromGroup))

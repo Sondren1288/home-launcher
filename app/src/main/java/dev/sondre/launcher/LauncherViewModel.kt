@@ -96,7 +96,8 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
 
     val state: StateFlow<UiState> =
         combine(apps, snapshotFlow { query }, userData, expanded, subItems) { apps, query, user, expanded, subs ->
-            val s = AppSearch.sections(apps, { it.key }, user.favorites, user.groups, user.counts, FREQUENT_LIMIT)
+            // Other home apps (One UI Home) are search-only.
+            val s = AppSearch.sections(apps.filterNot { it.isOtherHome }, { it.key }, user.favorites, user.groups, user.counts, FREQUENT_LIMIT)
             UiState(
                 query = query,
                 favorites = s.favorites,
