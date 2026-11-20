@@ -40,8 +40,13 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.filled.TrendingUp
+import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -69,12 +74,17 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -91,8 +101,17 @@ private object Style {
     val dim = Color.White.copy(alpha = 0.55f)
     /** Collapsed chevrons sit on the bare wallpaper, so keep them brighter. */
     val chevron = Color.White.copy(alpha = 0.85f)
+    /** Tile behind the chevron + section icon. */
+    val badge = Color.Black.copy(alpha = 0.35f)
     val searchBar = Color.White.copy(alpha = 0.10f)
+    /** Extra indent for apps inside an open group. */
+    val groupIndent = 24.dp
+    /** Width of long-press menus and dialogs, as a fraction of the screen. */
+    const val menuWidthFraction = 0.9f
 }
+
+/** Dialogs ignore the platform's narrow default width so they can use [Style.menuWidthFraction]. */
+private val WideDialog = DialogProperties(usePlatformDefaultWidth = false)
 
 /** Dialogs opened from long-press menus. */
 private sealed interface DialogState {
@@ -146,9 +165,10 @@ fun LauncherScreen(vm: LauncherViewModel) {
             .background(Color.Black.copy(alpha = scrimAlpha))
             .statusBarsPadding()
     ) {
-        val row: @Composable (AppEntry) -> Unit = { app ->
+        val appRow: @Composable (AppEntry, Dp) -> Unit = { app, indent ->
             AppRow(
                 app = app,
+                indent = indent,
                 isFavorite = app.key in state.favoriteKeys,
                 group = state.groupOfApp[app.key],
                 loadIcon = { a, px -> withContext(Dispatchers.IO) { vm.repository.loadIcon(a, px) } },
@@ -161,6 +181,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 onUninstall = { vm.uninstall(app) },
             )
         }
+        val row: @Composable (AppEntry) -> Unit = { appRow(it, 0.dp) }
 
         LazyColumn(
             state = listState,
@@ -189,48 +210,68 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 }
             } else {
                 section(
-                    id = SectionId.FAVORITES, title = "Favorites", apps = state.favorites,
+                    id = SectionId.FAVORITES, title = "Favorites", icon = Icons.Filled.Star,
+                    apps = state.favorites,
                     state = state, onToggle = vm::toggleSection, row = row,
                     emptyHint = "Long-press an app to add it here",
                 )
-                if (state.frequent.isNotEmpty()) {
-                    section(
-                        id = SectionId.FREQUENT, title = "Most used", apps = state.frequent,
-                        state = state, onToggle = vm::toggleSection, row = row,
-                    )
-                }
+                section(
+                    id = SectionId.FREQUENT, title = "Most used", icon = Icons.AutoMirrored.Filled.TrendingUp,
+                    apps = state.frequent,
+                    state = state, onToggle = vm::toggleSection, row = row,
+                    emptyHint = "Apps you open often will show up here",
+                )
                 val groups = state.groups
-                groups.forEachIndexed { index, (group, apps) ->
-                    section(
-                        id = SectionId.group(group.id), title = group.name, apps = apps,
-                        state = state, onToggle = vm::toggleSection, row = row,
-                        emptyHint = "Long-press an app and choose \"Move to group\"",
-                        menu = { close ->
-                            DropdownMenuItem(
-                                text = { Text("Rename") },
-                                onClick = { close(); dialog = DialogState.RenameGroup(group) },
-                            )
-                            if (index > 0) DropdownMenuItem(
-                                text = { Text("Move up") },
-                                onClick = { close(); vm.moveGroup(group, -1) },
-                            )
-                            if (index < groups.lastIndex) DropdownMenuItem(
-                                text = { Text("Move down") },
-                                onClick = { close(); vm.moveGroup(group, +1) },
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Delete group") },
-                                onClick = { close(); dialog = DialogState.DeleteGroup(group) },
-                            )
-                        },
-                    )
-                }
                 section(
                     id = SectionId.OTHER,
-                    title = if (groups.isEmpty()) "All apps" else "Other apps",
+                    title = "All apps",
+                    icon = Icons.Filled.Apps,
                     apps = state.ungrouped,
+                    count = state.ungrouped.size + groups.sumOf { it.apps.size },
                     state = state, onToggle = vm::toggleSection, row = row,
-                )
+                ) {
+                    // Groups live inside "All apps", above the ungrouped apps, like folders.
+                    groups.forEachIndexed { index, (group, apps) ->
+                        val groupId = SectionId.group(group.id)
+                        val open = groupId in state.expanded
+                        item(key = "folder:${group.id}") {
+                            GroupRow(
+                                name = group.name,
+                                count = apps.size,
+                                open = open,
+                                onToggle = { vm.toggleSection(groupId) },
+                            ) { close ->
+                                DropdownMenuItem(
+                                    text = { Text("Rename") },
+                                    onClick = { close(); dialog = DialogState.RenameGroup(group) },
+                                )
+                                if (index > 0) DropdownMenuItem(
+                                    text = { Text("Move up") },
+                                    onClick = { close(); vm.moveGroup(group, -1) },
+                                )
+                                if (index < groups.lastIndex) DropdownMenuItem(
+                                    text = { Text("Move down") },
+                                    onClick = { close(); vm.moveGroup(group, +1) },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Delete group") },
+                                    onClick = { close(); dialog = DialogState.DeleteGroup(group) },
+                                )
+                            }
+                        }
+                        if (open) {
+                            if (apps.isEmpty()) {
+                                item(key = "folder-hint:${group.id}") {
+                                    Hint(
+                                        "Long-press an app and choose \"Move to group\"",
+                                        Modifier.padding(start = Style.groupIndent),
+                                    )
+                                }
+                            }
+                            items(apps, key = { "folder:${group.id}:${it.key}" }) { appRow(it, Style.groupIndent) }
+                        }
+                    }
+                }
             }
         }
 
@@ -271,6 +312,9 @@ fun LauncherScreen(vm: LauncherViewModel) {
         )
         is DialogState.DeleteGroup -> AlertDialog(
             onDismissRequest = { dialog = null },
+            shape = RectangleShape,
+            properties = WideDialog,
+            modifier = Modifier.fillMaxWidth(Style.menuWidthFraction),
             title = { Text("Delete \"${d.group.name}\"?") },
             text = { Text("The apps in it go back to the main list. They are not uninstalled.") },
             confirmButton = {
@@ -299,21 +343,25 @@ private fun Modifier.clearFocusOnPress(focusManager: FocusManager): Modifier = p
 private fun LazyListScope.section(
     id: String,
     title: String,
+    icon: ImageVector,
     apps: List<AppEntry>,
     state: UiState,
     onToggle: (String) -> Unit,
     row: @Composable (AppEntry) -> Unit,
+    count: Int = apps.size,
     emptyHint: String? = null,
-    menu: (@Composable ColumnScope.(close: () -> Unit) -> Unit)? = null,
+    /** Extra items shown above [apps] while expanded (the groups, for "All apps"). */
+    nested: LazyListScope.() -> Unit = {},
 ) {
     val expanded = id in state.expanded
     item(key = "header:$id") {
-        SectionHeader(title, apps.size, expanded, onToggle = { onToggle(id) }, menu = menu)
+        SectionHeader(title, icon, count, expanded, onToggle = { onToggle(id) })
     }
     if (!expanded) return
-    if (apps.isEmpty() && emptyHint != null) {
+    if (count == 0 && emptyHint != null) {
         item(key = "hint:$id") { Hint(emptyHint) }
     }
+    nested()
     items(apps, key = { "$id:${it.key}" }) { row(it) }
 }
 
@@ -347,39 +395,49 @@ private fun SearchField(
     )
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun SectionHeader(
     title: String,
+    icon: ImageVector,
     count: Int,
     expanded: Boolean,
     onToggle: () -> Unit,
-    menu: (@Composable ColumnScope.(close: () -> Unit) -> Unit)?,
 ) {
-    var menuOpen by remember { mutableStateOf(false) }
     // Points right when collapsed, down when expanded.
     val rotation by animateFloatAsState(if (expanded) 90f else 0f, label = "chevron")
-    Box {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier
-                .fillMaxWidth()
-                .combinedClickable(
-                    onClickLabel = if (expanded) "Collapse $title" else "Expand $title",
-                    onClick = onToggle,
-                    onLongClick = if (menu != null) ({ menuOpen = true }) else null,
-                )
-                .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 6.dp),
-        ) {
-            Icon(
-                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                contentDescription = title,
-                tint = if (expanded) Style.dim else Style.chevron,
-                modifier = Modifier.size(22.dp).rotate(rotation),
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(
+                onClickLabel = if (expanded) "Collapse $title" else "Expand $title",
+                onClick = onToggle,
             )
-            // Collapsed sections show only the chevron; the title appears once expanded.
+            .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 4.dp),
+    ) {
+            // Chevron + section icon on a darker, sharp-cornered tile so they read on any wallpaper.
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .background(Style.badge, RectangleShape)
+                    .padding(horizontal = 4.dp, vertical = 4.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                    contentDescription = null,
+                    tint = Style.chevron,
+                    modifier = Modifier.size(22.dp).rotate(rotation),
+                )
+                Icon(
+                    imageVector = icon,
+                    contentDescription = title,
+                    tint = Style.chevron,
+                    modifier = Modifier.padding(start = 2.dp, end = 4.dp).size(18.dp),
+                )
+            }
+            // Collapsed sections show only the tile; the title appears once expanded.
             if (expanded) {
-                Spacer(Modifier.width(6.dp))
+                Spacer(Modifier.width(10.dp))
                 Text(
                     text = title.uppercase(),
                     color = Style.dim,
@@ -392,22 +450,78 @@ private fun SectionHeader(
                 Spacer(Modifier.width(8.dp))
                 Text(text = count.toString(), color = Style.dim.copy(alpha = 0.35f), fontSize = 12.sp)
             }
+    }
+}
+
+/** A group ("folder") inside All apps: looks like an app row; tap to open, long-press for options. */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun GroupRow(
+    name: String,
+    count: Int,
+    open: Boolean,
+    onToggle: () -> Unit,
+    menu: @Composable ColumnScope.(close: () -> Unit) -> Unit,
+) {
+    var menuOpen by remember { mutableStateOf(false) }
+    Box {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .combinedClickable(
+                    onClickLabel = if (open) "Close $name" else "Open $name",
+                    onClick = onToggle,
+                    onLongClick = { menuOpen = true },
+                )
+                .padding(horizontal = 20.dp, vertical = Style.rowVerticalPadding),
+        ) {
+            Icon(
+                imageVector = if (open) Icons.Filled.FolderOpen else Icons.Filled.Folder,
+                contentDescription = null,
+                tint = Style.text,
+                modifier = Modifier.size(Style.iconSize),
+            )
+            Spacer(Modifier.width(14.dp))
+            Text(
+                text = name,
+                color = Style.text,
+                fontSize = Style.labelSize,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(text = count.toString(), color = Style.dim, fontSize = 13.sp)
         }
-        if (menu != null) {
-            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                menu { menuOpen = false }
-            }
+        LauncherMenu(expanded = menuOpen, onDismiss = { menuOpen = false }) {
+            menu { menuOpen = false }
         }
     }
 }
 
+/** Long-press menu: wide, centred, sharp corners. */
 @Composable
-private fun Hint(text: String) {
+private fun LauncherMenu(expanded: Boolean, onDismiss: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
+    val screen = LocalConfiguration.current.screenWidthDp.dp
+    val width = screen * Style.menuWidthFraction
+    DropdownMenu(
+        expanded = expanded,
+        onDismissRequest = onDismiss,
+        modifier = Modifier.width(width),
+        offset = DpOffset((screen - width) / 2, 0.dp),
+        shape = RectangleShape,
+        content = content,
+    )
+}
+
+@Composable
+private fun Hint(text: String, modifier: Modifier = Modifier) {
     Text(
         text = text,
         color = Style.dim,
         fontSize = 14.sp,
-        modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
+        modifier = modifier.padding(horizontal = 20.dp, vertical = 8.dp),
     )
 }
 
@@ -453,6 +567,8 @@ private fun AppRow(
     onRemoveFromGroup: () -> Unit,
     onAppInfo: () -> Unit,
     onUninstall: () -> Unit,
+    /** Extra start padding, for apps shown inside an open group. */
+    indent: Dp = 0.dp,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     val iconPx = with(LocalDensity.current) { Style.iconSize.roundToPx() }
@@ -467,7 +583,8 @@ private fun AppRow(
             modifier = Modifier
                 .fillMaxWidth()
                 .combinedClickable(onClick = onClick, onLongClick = { menuOpen = true })
-                .padding(horizontal = 20.dp, vertical = Style.rowVerticalPadding),
+                .padding(start = 20.dp + indent, end = 20.dp)
+                .padding(vertical = Style.rowVerticalPadding),
         ) {
             val bmp = icon
             if (bmp != null) {
@@ -484,7 +601,7 @@ private fun AppRow(
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+        LauncherMenu(expanded = menuOpen, onDismiss = { menuOpen = false }) {
             DropdownMenuItem(
                 text = { Text(if (isFavorite) "Remove from favorites" else "Add to favorites") },
                 onClick = { menuOpen = false; onToggleFavorite() },
@@ -517,6 +634,9 @@ private fun GroupPickerDialog(
     var newName by remember { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = onDismiss,
+        shape = RectangleShape,
+        properties = WideDialog,
+        modifier = Modifier.fillMaxWidth(Style.menuWidthFraction),
         title = { Text("Move ${app.label} to") },
         text = {
             Column {
@@ -542,6 +662,8 @@ private fun GroupPickerDialog(
                     onValueChange = { newName = it },
                     label = { Text("New group") },
                     singleLine = true,
+                    shape = RectangleShape,
+                    modifier = Modifier.fillMaxWidth(),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                     keyboardActions = KeyboardActions(onDone = { if (newName.isNotBlank()) onCreate(newName) }),
                 )
@@ -565,12 +687,17 @@ private fun NameDialog(
     var name by remember { mutableStateOf(initial) }
     AlertDialog(
         onDismissRequest = onDismiss,
+        shape = RectangleShape,
+        properties = WideDialog,
+        modifier = Modifier.fillMaxWidth(Style.menuWidthFraction),
         title = { Text(title) },
         text = {
             OutlinedTextField(
                 value = name,
                 onValueChange = { name = it },
                 singleLine = true,
+                shape = RectangleShape,
+                modifier = Modifier.fillMaxWidth(),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                 keyboardActions = KeyboardActions(onDone = { if (name.isNotBlank()) onConfirm(name) }),
             )
