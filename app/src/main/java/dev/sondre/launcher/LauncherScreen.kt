@@ -11,6 +11,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -66,7 +67,17 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.composed
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.focus.FocusManager
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -108,6 +119,13 @@ private object Style {
     val groupIndent = 24.dp
     /** Width of long-press menus and dialogs, as a fraction of the screen. */
     const val menuWidthFraction = 0.9f
+    /** Long-press menus start here, left of the app icons (20dp) so they cover them fully. */
+    val menuLeft = 8.dp
+    val menuDivider = Color.White.copy(alpha = 0.18f)
+    /** Clock: sized so time + date roughly span the three collapsed section tiles. */
+    val clockTimeSize = 80.sp
+    val clockDateSize = 15.sp
+    val clockTop = 6.dp
 }
 
 /** Dialogs ignore the platform's narrow default width so they can use [Style.menuWidthFraction]. */
@@ -183,12 +201,35 @@ fun LauncherScreen(vm: LauncherViewModel) {
         }
         val row: @Composable (AppEntry) -> Unit = { appRow(it, 0.dp) }
 
+        // The clock sits on the layer *behind* the list and fades out as soon as anything opens,
+        // so expanded rows never draw on top of it.
+        val clockShown = state.expanded.isEmpty() && !searchFocused && vm.query.isEmpty()
+        val clockAlpha by animateFloatAsState(if (clockShown) 1f else 0f, label = "clock")
+        val context = LocalContext.current
+        var clockBounds by remember { mutableStateOf(Rect.Zero) }
+
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            Clock(
+                timeSize = Style.clockTimeSize,
+                dateSize = Style.clockDateSize,
+                color = Style.text,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = Style.clockTop, end = 20.dp)
+                    .alpha(clockAlpha)
+                    .onGloballyPositioned { clockBounds = it.boundsInRoot() },
+            )
+
         LazyColumn(
             state = listState,
             modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .clearFocusOnPress(focusManager),
+                .fillMaxSize()
+                .clearFocusOnPress(focusManager)
+                // The list covers the clock, so taps there are picked up here: only taps
+                // nothing else in the list used (not scrolls, not section headers).
+                .onUnusedTap { rootPos ->
+                    if (clockShown && clockBounds.contains(rootPos)) openAlarms(context)
+                },
         ) {
             if (state.isSearching) {
                 if (state.results.isEmpty()) {
@@ -240,24 +281,13 @@ fun LauncherScreen(vm: LauncherViewModel) {
                                 count = apps.size,
                                 open = open,
                                 onToggle = { vm.toggleSection(groupId) },
-                            ) { close ->
-                                DropdownMenuItem(
-                                    text = { Text("Rename") },
-                                    onClick = { close(); dialog = DialogState.RenameGroup(group) },
-                                )
-                                if (index > 0) DropdownMenuItem(
-                                    text = { Text("Move up") },
-                                    onClick = { close(); vm.moveGroup(group, -1) },
-                                )
-                                if (index < groups.lastIndex) DropdownMenuItem(
-                                    text = { Text("Move down") },
-                                    onClick = { close(); vm.moveGroup(group, +1) },
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("Delete group") },
-                                    onClick = { close(); dialog = DialogState.DeleteGroup(group) },
-                                )
-                            }
+                                actions = buildList {
+                                    add(MenuAction("Rename") { dialog = DialogState.RenameGroup(group) })
+                                    if (index > 0) add(MenuAction("Move up") { vm.moveGroup(group, -1) })
+                                    if (index < groups.lastIndex) add(MenuAction("Move down") { vm.moveGroup(group, +1) })
+                                    add(MenuAction("Delete group") { dialog = DialogState.DeleteGroup(group) })
+                                },
+                            )
                         }
                         if (open) {
                             if (apps.isEmpty()) {
@@ -274,6 +304,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 }
             }
         }
+        } // Box(clock + list)
 
         // Full-width, square bar at the bottom. Its background runs under the navigation bar,
         // and it rides on top of the keyboard when that's open.
@@ -333,6 +364,22 @@ private fun Modifier.clearFocusOnPress(focusManager: FocusManager): Modifier = p
     awaitEachGesture {
         awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
         focusManager.clearFocus()
+    }
+}
+
+/**
+ * Calls [onTap] (with the position in root coordinates) for taps that no child consumed:
+ * a scroll or a click on a row/header cancels it. Runs in the Final pass so children go first.
+ */
+private fun Modifier.onUnusedTap(onTap: (Offset) -> Unit): Modifier = composed {
+    var coords by remember { mutableStateOf<LayoutCoordinates?>(null) }
+    val currentOnTap by rememberUpdatedState(onTap)
+    onGloballyPositioned { coords = it }.pointerInput(Unit) {
+        awaitEachGesture {
+            awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Final)
+            val up = waitForUpOrCancellation(pass = PointerEventPass.Final) ?: return@awaitEachGesture
+            coords?.let { currentOnTap(it.localToRoot(up.position)) }
+        }
     }
 }
 
@@ -408,7 +455,8 @@ private fun SectionHeader(
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
-            .fillMaxWidth()
+            // Collapsed: only the tile is tappable, so taps next to it reach the clock behind.
+            .then(if (expanded) Modifier.fillMaxWidth() else Modifier)
             .clickable(
                 onClickLabel = if (expanded) "Collapse $title" else "Expand $title",
                 onClick = onToggle,
@@ -461,7 +509,7 @@ private fun GroupRow(
     count: Int,
     open: Boolean,
     onToggle: () -> Unit,
-    menu: @Composable ColumnScope.(close: () -> Unit) -> Unit,
+    actions: List<MenuAction>,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     Box {
@@ -494,25 +542,38 @@ private fun GroupRow(
             Spacer(Modifier.width(8.dp))
             Text(text = count.toString(), color = Style.dim, fontSize = 13.sp)
         }
-        LauncherMenu(expanded = menuOpen, onDismiss = { menuOpen = false }) {
-            menu { menuOpen = false }
-        }
+        LauncherMenu(expanded = menuOpen, onDismiss = { menuOpen = false }, actions = actions)
     }
 }
 
-/** Long-press menu: wide, centred, sharp corners. */
+/** One entry in a [LauncherMenu]. */
+private data class MenuAction(val label: String, val onClick: () -> Unit)
+
+/**
+ * Long-press menu: wide, sharp corners, thin dividers between entries. It starts a little
+ * left of the app icons so it fully covers the rows underneath.
+ */
 @Composable
-private fun LauncherMenu(expanded: Boolean, onDismiss: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
+private fun LauncherMenu(expanded: Boolean, onDismiss: () -> Unit, actions: List<MenuAction>) {
     val screen = LocalConfiguration.current.screenWidthDp.dp
-    val width = screen * Style.menuWidthFraction
+    val left = Style.menuLeft
+    val right = screen * (1 + Style.menuWidthFraction) / 2 // same right edge as a centred menu
     DropdownMenu(
         expanded = expanded,
         onDismissRequest = onDismiss,
-        modifier = Modifier.width(width),
-        offset = DpOffset((screen - width) / 2, 0.dp),
+        modifier = Modifier.width(right - left),
+        offset = DpOffset(left, 0.dp),
         shape = RectangleShape,
-        content = content,
-    )
+    ) {
+        actions.forEachIndexed { i, action ->
+            if (i > 0) HorizontalDivider(thickness = 0.5.dp, color = Style.menuDivider)
+            DropdownMenuItem(
+                text = { Text(action.label) },
+                onClick = { onDismiss(); action.onClick() },
+                contentPadding = PaddingValues(start = 20.dp, end = 16.dp),
+            )
+        }
+    }
 }
 
 @Composable
@@ -601,24 +662,17 @@ private fun AppRow(
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        LauncherMenu(expanded = menuOpen, onDismiss = { menuOpen = false }) {
-            DropdownMenuItem(
-                text = { Text(if (isFavorite) "Remove from favorites" else "Add to favorites") },
-                onClick = { menuOpen = false; onToggleFavorite() },
-            )
-            DropdownMenuItem(
-                text = { Text(if (group == null) "Move to group…" else "Move to another group…") },
-                onClick = { menuOpen = false; onPickGroup() },
-            )
-            if (group != null) {
-                DropdownMenuItem(
-                    text = { Text("Remove from \"${group.name}\"") },
-                    onClick = { menuOpen = false; onRemoveFromGroup() },
-                )
-            }
-            DropdownMenuItem(text = { Text("App info") }, onClick = { menuOpen = false; onAppInfo() })
-            DropdownMenuItem(text = { Text("Uninstall") }, onClick = { menuOpen = false; onUninstall() })
-        }
+        LauncherMenu(
+            expanded = menuOpen,
+            onDismiss = { menuOpen = false },
+            actions = buildList {
+                add(MenuAction(if (isFavorite) "Remove from favorites" else "Add to favorites", onToggleFavorite))
+                add(MenuAction(if (group == null) "Move to group…" else "Move to another group…", onPickGroup))
+                if (group != null) add(MenuAction("Remove from \"${group.name}\"", onRemoveFromGroup))
+                add(MenuAction("App info", onAppInfo))
+                add(MenuAction("Uninstall", onUninstall))
+            },
+        )
     }
 }
 

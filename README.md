@@ -9,6 +9,8 @@ A minimal Android home screen: collapsible sections — **Favorites**, **Most us
   Favorites and Most used are always shown, even when empty.
   The wallpaper is shown as-is until a section is expanded or the search is in use, then it's darkened.
 - Tapping anywhere outside the search bar, or hiding the keyboard, ends the search focus (no blinking cursor).
+- A large monospaced clock with the date sits to the right of the collapsed section tiles; tap it to open
+  the alarms in your clock app. It's drawn behind the list and fades out when a section opens or you search.
 - Type to filter. Search covers all apps, regardless of what's collapsed. Matching ignores case and accents and ranks: prefix > word prefix > initials
   (`gm` → Google Maps) > substring > subsequence. Ties go to the app you launch most.
   Press Go/Enter on the keyboard to open the top result.
@@ -38,6 +40,7 @@ A minimal Android home screen: collapsible sections — **Favorites**, **Most us
 | `.../AppRepository.kt` | App list (`LauncherApps`), launching, square icon rendering, change callbacks |
 | `.../UsageStore.kt` | Favorites, groups and launch counts (SharedPreferences) |
 | `.../SubItems.kt` | In-app search sources: app shortcuts and contacts, and launching them |
+| `.../Clock.kt` | Home-screen clock (minute ticks, locale date) and opening the alarms list |
 | `.../LauncherViewModel.kt` | Combines the above into `UiState` |
 | `.../LauncherScreen.kt` | Compose UI. Tweak sizes and colors in `Style` at the top |
 | `.../MainActivity.kt` | HOME activity, edge-to-edge, Home-press reset |
