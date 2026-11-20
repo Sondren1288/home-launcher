@@ -90,6 +90,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -108,7 +109,7 @@ private object Style {
     val labelSize = 16.sp
     val subLabelSize = 15.sp
     /** How dark the wallpaper gets while a section or the search is open. */
-    const val scrimAlpha = 0.55f
+    const val scrimAlpha = 0.66f
     val text = Color.White
     val dim = Color.White.copy(alpha = 0.55f)
     /** Collapsed chevrons sit on the bare wallpaper, so keep them brighter. */
@@ -126,11 +127,13 @@ private object Style {
     /** Clock: sized so time + date roughly span the three collapsed section tiles. */
     val clockTimeSize = 80.sp
     val clockDateSize = 15.sp
+    /** Font of the clock's time: JetBrains Mono, weight 100–800 (700 = Bold). */
+    val clockFont = ClockFonts.jetBrainsMono(500)
     val clockTop = 6.dp
     /** Letter in the A–Z dividers. */
     val letterSize = 11.sp
-    /** How far a swipe up on the home screen must travel to open Favorites + All apps. */
-    val swipeUpDistance = 48.dp
+    /** How far a swipe on the home screen must travel (up: open lists, down: notifications). */
+    val swipeDistance = 48.dp
 }
 
 /** Dialogs ignore the platform's narrow default width so they can use [Style.menuWidthFraction]. */
@@ -186,6 +189,9 @@ fun LauncherScreen(vm: LauncherViewModel) {
     // Darken the wallpaper only while something is open: a section, or the search.
     val dimmed = state.expanded.isNotEmpty() || searchFocused || vm.query.isNotEmpty()
     val scrimAlpha by animateFloatAsState(if (dimmed) Style.scrimAlpha else 0f, label = "scrim")
+    val searchListState = rememberLazyListState()
+    // A new query starts at the best match (bottom of the reversed list).
+    LaunchedEffect(state.query) { searchListState.scrollToItem(0) }
 
     Column(
         Modifier
@@ -223,6 +229,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
             Clock(
                 timeSize = Style.clockTimeSize,
                 dateSize = Style.clockDateSize,
+                font = Style.clockFont,
                 color = Style.text,
                 modifier = Modifier
                     .align(Alignment.TopEnd)
@@ -232,7 +239,9 @@ fun LauncherScreen(vm: LauncherViewModel) {
             )
 
         LazyColumn(
-            state = listState,
+            // Search results use their own state and grow upwards from the search bar.
+            state = if (state.isSearching) searchListState else listState,
+            reverseLayout = state.isSearching,
             modifier = Modifier
                 .fillMaxSize()
                 .clearFocusOnPress(focusManager)
@@ -241,18 +250,27 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 .onUnusedTap { rootPos ->
                     if (clockShown && clockBounds.contains(rootPos)) openAlarms(context)
                 }
-                // Swipe up on the bare home screen opens Favorites + All apps.
-                .onSwipeUp(enabled = clockShown, minDistance = Style.swipeUpDistance) { vm.expandHome() },
+                // On the bare home screen: swipe up opens Favorites + All apps,
+                // swipe down pulls down the notification shade.
+                .onVerticalSwipe(
+                    enabled = clockShown,
+                    minDistance = Style.swipeDistance,
+                    onUp = vm::expandHome,
+                    onDown = { expandNotifications(context) },
+                ),
         ) {
             if (state.isSearching) {
+                // reverseLayout: the first item emitted sits at the bottom, next to the search
+                // bar, so the best match is closest to your thumb. Within a result the app must
+                // still appear above its chats/contacts, so those are emitted first, reversed.
                 if (state.results.isEmpty()) {
                     item { Hint("No apps match \"${state.query}\"") }
                 }
                 for (r in state.results) {
-                    item(key = "res:${r.item.key}") { row(r.item) }
-                    items(r.children, key = { "res:${r.item.key}:${it.id}" }) { sub ->
+                    items(r.children.asReversed(), key = { "res:${r.item.key}:${it.id}" }) { sub ->
                         SubRow(sub.label, onClick = { vm.launchSub(sub) })
                     }
+                    item(key = "res:${r.item.key}") { row(r.item) }
                 }
                 if (showContactsPrompt) {
                     item(key = "contacts-prompt") {
@@ -398,12 +416,19 @@ private fun Modifier.onUnusedTap(onTap: (Offset) -> Unit): Modifier = composed {
 }
 
 /**
- * Calls [onSwipe] for a mostly-vertical upward swipe of at least [minDistance]. Only observes
- * (Initial pass, nothing consumed), so the list still scrolls normally once it's expanded.
+ * Calls [onUp] / [onDown] for a mostly-vertical swipe of at least [minDistance]. Observes the
+ * Initial pass and only consumes the rest of a gesture once it has fired, so normal scrolling
+ * is untouched (and is off anyway while [enabled] is false).
  */
-private fun Modifier.onSwipeUp(enabled: Boolean, minDistance: Dp, onSwipe: () -> Unit): Modifier = composed {
+private fun Modifier.onVerticalSwipe(
+    enabled: Boolean,
+    minDistance: Dp,
+    onUp: () -> Unit,
+    onDown: () -> Unit,
+): Modifier = composed {
     val currentEnabled by rememberUpdatedState(enabled)
-    val currentOnSwipe by rememberUpdatedState(onSwipe)
+    val currentOnUp by rememberUpdatedState(onUp)
+    val currentOnDown by rememberUpdatedState(onDown)
     pointerInput(Unit) {
         val threshold = minDistance.toPx()
         awaitEachGesture {
@@ -414,12 +439,12 @@ private fun Modifier.onSwipeUp(enabled: Boolean, minDistance: Dp, onSwipe: () ->
                 val event = awaitPointerEvent(PointerEventPass.Initial)
                 val change = event.changes.firstOrNull { it.id == down.id } ?: break
                 val d = change.position - down.position
-                if (!fired && -d.y > threshold && -d.y > 2 * kotlin.math.abs(d.x)) {
+                val vertical = kotlin.math.abs(d.y) > 2 * kotlin.math.abs(d.x)
+                if (!fired && vertical && kotlin.math.abs(d.y) > threshold) {
                     fired = true
-                    currentOnSwipe()
+                    if (d.y < 0) currentOnUp() else currentOnDown()
                 }
-                // Once it has opened the sections, the rest of this swipe shouldn't also
-                // scroll the freshly expanded list.
+                // After firing, the rest of this swipe shouldn't also scroll the list.
                 if (fired) change.consume()
                 if (!change.pressed) break
             }

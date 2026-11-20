@@ -6,14 +6,16 @@ A minimal Android home screen: collapsible sections — **Favorites**, **Most us
 
 - Every section starts collapsed and shows only a dark, sharp-cornered tile with a chevron (›) and an icon:
   ★ Favorites, ↗ Most used, ⊞ All apps. Tap it to expand and see the title.
-  Swiping up on the home screen opens Favorites and All apps; Back closes whatever is open.
+  Swiping up on the home screen opens Favorites and All apps; swiping down pulls down the
+  notification shade (both only while nothing is open). Back closes whatever is open.
   All apps has a small `B ──── B` divider before each new letter.
   Favorites and Most used are always shown, even when empty.
   The wallpaper is shown as-is until a section is expanded or the search is in use, then it's darkened.
 - Tapping anywhere outside the search bar, or hiding the keyboard, ends the search focus (no blinking cursor).
-- A large monospaced clock with the date sits to the right of the collapsed section tiles; tap it to open
+- A large clock (JetBrains Mono Bold) with the date sits to the right of the collapsed section tiles; tap it to open
   the alarms in your clock app. It's drawn behind the list and fades out when a section opens or you search.
-- Type to filter. Search covers all apps, regardless of what's collapsed. Matching ignores case and accents and ranks: prefix > word prefix > initials
+- Type to filter. Results grow upwards from the search bar, best match at the bottom (next to your thumb).
+  Search covers all apps, regardless of what's collapsed. Matching ignores case and accents and ranks: prefix > word prefix > initials
   (`gm` → Google Maps) > substring > subsequence. Ties go to the app you launch most.
   Press Go/Enter on the keyboard to open the top result.
 - Search also finds things *inside* apps and shows them indented under the app they belong to

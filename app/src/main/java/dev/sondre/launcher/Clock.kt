@@ -25,14 +25,21 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import java.util.Date
 import java.util.Locale
 
-/** Big monospaced time with the date underneath. Purely visual; taps are handled by the caller. */
+/** Big time with the date underneath. Purely visual; taps are handled by the caller. */
 @Composable
-fun Clock(timeSize: TextUnit, dateSize: TextUnit, color: Color, modifier: Modifier = Modifier) {
+fun Clock(
+    timeSize: TextUnit,
+    dateSize: TextUnit,
+    color: Color,
+    font: ClockFont,
+    modifier: Modifier = Modifier,
+) {
     val context = LocalContext.current
     val now = rememberNow()
     val is24h = DateFormat.is24HourFormat(context)
@@ -46,13 +53,17 @@ fun Clock(timeSize: TextUnit, dateSize: TextUnit, color: Color, modifier: Modifi
         Text(
             text = time,
             color = color,
+            maxLines = 1,
+            softWrap = false,
             style = TextStyle(
-                fontFamily = FontFamily.Monospace,
+                fontFamily = font.family,
+                fontWeight = font.weight,
                 fontSize = timeSize,
                 lineHeight = timeSize,
                 shadow = shadow,
             ),
         )
+        // The date stays in the system monospace, smaller and lighter than the time.
         Text(
             text = date,
             color = color.copy(alpha = 0.85f),
