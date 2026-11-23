@@ -31,7 +31,7 @@ import kotlinx.coroutines.withContext
 
 /** Ids for collapsible sections. */
 object SectionId {
-    const val FAVORITES = "fav"
+    const val FOLDERS = "folders"
     const val FREQUENT = "freq"
     const val OTHER = "other"
     fun group(id: String) = "group:$id"
@@ -41,12 +41,11 @@ typealias SearchResult = AppSearch.Match<AppEntry, SubEntry>
 
 data class UiState(
     val query: String = "",
-    val favorites: List<AppEntry> = emptyList(),
     val frequent: List<AppEntry> = emptyList(),
     val groups: List<AppSearch.GroupSection<AppEntry>> = emptyList(),
-    val ungrouped: List<AppEntry> = emptyList(),
+    /** Every app, A–Z, including those in folders. */
+    val all: List<AppEntry> = emptyList(),
     val results: List<SearchResult> = emptyList(),
-    val favoriteKeys: Set<String> = emptySet(),
     /** app key -> group it belongs to */
     val groupOfApp: Map<String, AppGroup> = emptyMap(),
     val expanded: Set<String> = emptySet(),
@@ -84,12 +83,11 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
     val showContactsPrompt: StateFlow<Boolean> = _showContactsPrompt.asStateFlow()
 
     private data class UserData(
-        val favorites: List<String>,
         val groups: List<AppGroup>,
         val counts: Map<String, Int>,
     )
 
-    private val userData = combine(usage.favorites, usage.groups, usage.launchCounts, ::UserData)
+    private val userData = combine(usage.groups, usage.launchCounts, ::UserData)
 
     /** Shortcuts and contacts, attached to the app they belong to. */
     private val subItems = combine(apps, shortcuts, contacts) { apps, sc, ct -> attachToApps(sc + ct, apps) }
@@ -97,15 +95,14 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
     val state: StateFlow<UiState> =
         combine(apps, snapshotFlow { query }, userData, expanded, subItems) { apps, query, user, expanded, subs ->
             // Other home apps (One UI Home) are search-only.
-            val s = AppSearch.sections(apps.filterNot { it.isOtherHome }, { it.key }, user.favorites, user.groups, user.counts, FREQUENT_LIMIT)
+            val listed = apps.filterNot { it.isOtherHome }
+            val s = AppSearch.sections(listed, { it.key }, user.groups, user.counts, FREQUENT_LIMIT)
             UiState(
                 query = query,
-                favorites = s.favorites,
                 frequent = s.frequent,
                 groups = s.groups,
-                ungrouped = s.ungrouped,
+                all = listed,
                 results = search(apps, subs, query, user.counts),
-                favoriteKeys = user.favorites.toSet(),
                 // reversed() so the first group wins on duplicates, matching AppSearch.sections
                 groupOfApp = user.groups.reversed().flatMap { g -> g.appKeys.map { it to g } }.toMap(),
                 expanded = expanded,
@@ -204,9 +201,25 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
         expanded.value = expanded.value.let { if (id in it) it - id else it + id }
     }
 
-    /** Swipe up on the home screen: open Favorites and All apps. */
+    /** Swipe up on the home screen: open Folders and Most used. */
     fun expandHome() {
-        expanded.value = expanded.value + SectionId.FAVORITES + SectionId.OTHER
+        expanded.value = expanded.value + SectionId.FOLDERS + SectionId.FREQUENT
+    }
+
+    /** Swipe right: open every section, and every folder inside Folders. */
+    fun expandAll() {
+        expanded.value = expanded.value + SectionId.FOLDERS + SectionId.FREQUENT + SectionId.OTHER +
+            state.value.groups.map { SectionId.group(it.group.id) }
+    }
+
+    /**
+     * Swipe left: close the open folders and All apps, which leaves the swipe-up state
+     * (Folders + Most used). If none of those are open, close everything.
+     */
+    fun swipeClose() {
+        val open = expanded.value
+        val first = open.filter { it.startsWith(SectionId.group("")) || it == SectionId.OTHER }
+        expanded.value = if (first.isNotEmpty()) open - first.toSet() else emptySet()
     }
 
     /** Back: close whatever is open. Returns false if nothing was open. */
@@ -254,8 +267,6 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
         val top = search(apps.value, subs, query, counts).firstOrNull() ?: return
         if (top.matchedItself || top.children.isEmpty()) launch(top.item) else launchSub(top.children.first())
     }
-
-    fun toggleFavorite(app: AppEntry) = usage.toggleFavorite(app.key)
 
     fun moveToGroup(app: AppEntry, groupId: String?) = usage.setAppGroup(app.key, groupId)
 

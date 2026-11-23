@@ -48,34 +48,30 @@ class AppSearchTest {
     }
 
     @Test
-    fun `sections keep favorite order and exclude favorites from frequent`() {
+    fun `frequent is sorted by count, ties keep list order, and limited`() {
         val counts = mapOf("Yr" to 3, "Gmail" to 9, "Camera" to 1, "Ruter" to 3)
-        val s = AppSearch.sections(apps, { it }, listOf("Ruter", "Calendar", "Uninstalled"), emptyList(), counts, frequentLimit = 2)
-        assertEquals(listOf("Ruter", "Calendar"), s.favorites)
-        assertEquals(listOf("Gmail", "Yr"), s.frequent)
-        assertEquals(apps, s.ungrouped)
+        val s = AppSearch.sections(apps, { it }, emptyList(), counts, frequentLimit = 3)
+        assertEquals(listOf("Gmail", "Yr", "Ruter"), s.frequent)
     }
 
     @Test
-    fun `groups keep their order, members are alphabetical, and are removed from ungrouped`() {
+    fun `groups keep their order and members are alphabetical`() {
         val groups = listOf(
             AppGroup("travel", "Travel", listOf("Ruter", "Google Maps", "Uninstalled")),
             AppGroup("empty", "Empty", emptyList()),
             AppGroup("photo", "Photo", listOf("Camera", "Ruter")), // Ruter already in Travel
         )
-        val s = AppSearch.sections(apps, { it }, emptyList(), groups, emptyMap(), frequentLimit = 5)
+        val s = AppSearch.sections(apps, { it }, groups, emptyMap(), frequentLimit = 5)
         assertEquals(listOf("Travel", "Empty", "Photo"), s.groups.map { it.group.name })
         assertEquals(listOf("Google Maps", "Ruter"), s.groups[0].apps)
         assertEquals(emptyList<String>(), s.groups[1].apps)
         assertEquals(listOf("Camera"), s.groups[2].apps)
-        assertEquals(listOf("Calculator", "Calendar", "Gmail", "Maps.me", "Yr"), s.ungrouped)
     }
 
     @Test
-    fun `favorites and frequent still include grouped apps`() {
+    fun `frequent still includes grouped apps`() {
         val groups = listOf(AppGroup("g", "G", listOf("Gmail", "Yr")))
-        val s = AppSearch.sections(apps, { it }, listOf("Yr"), groups, mapOf("Gmail" to 2), frequentLimit = 5)
-        assertEquals(listOf("Yr"), s.favorites)
+        val s = AppSearch.sections(apps, { it }, groups, mapOf("Gmail" to 2), frequentLimit = 5)
         assertEquals(listOf("Gmail"), s.frequent)
     }
 

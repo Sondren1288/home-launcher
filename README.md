@@ -1,15 +1,17 @@
 # home-launcher
 
-A minimal Android home screen: collapsible sections — **Favorites**, **Most used** and
-**All apps (A–Z)**, with your groups as folders at the top of All apps — as a plain list of
+A minimal Android home screen: collapsible sections — **Folders** (your groups), **Most used** and
+**All apps (A–Z)** — as a plain list of
 `[square icon] App name` rows over the wallpaper, with a full-width search bar at the bottom.
 
 - Every section starts collapsed and shows only a dark, sharp-cornered tile with a chevron (›) and an icon:
-  ★ Favorites, 🕓 Most used, ⊞ All apps. Tap it to expand and see the title.
-  Swiping up on the home screen opens Favorites and All apps; swiping down pulls down the
+  📁 Folders, 🕓 Most used, ⊞ All apps. Tap it to expand and see the title.
+  Swiping up on the home screen opens Folders and Most used; swiping down pulls down the
   notification shade (both only while nothing is open). Back closes whatever is open.
+  Swiping right (anywhere, when not searching) opens every section and every folder; swiping left
+  closes the open folders and All apps (back to the swipe-up state), and a second swipe left closes everything.
   All apps has a small `B ──── B` divider before each new letter.
-  Favorites and Most used are always shown, even when empty.
+  Folders and Most used are always shown, even when empty.
   The wallpaper is shown as-is until a section is expanded or the search is in use, then it's darkened.
 - Tapping anywhere outside the search bar, or hiding the keyboard, ends the search focus (no blinking cursor).
 - A large clock (JetBrains Mono Bold) with the date sits to the right of the collapsed section tiles; tap it to open
@@ -24,11 +26,10 @@ A minimal Android home screen: collapsible sections — **Favorites**, **Most us
   - **Contacts** (optional; asked for in the search results): every contact under the Contacts app,
     plus the actions apps attach to contacts (WhatsApp, Signal, Telegram…) under those apps.
   These only match on name/word prefixes, to keep a big contact list from flooding the results.
-- Long-press an app to add or remove it from favorites, move it to a group (or a new one), open App info, or uninstall it.
-  An app is in at most one group; grouped apps show inside their folder instead of loose in All apps,
-  but can still be favorites.
-- Groups are folders at the top of All apps: tap to open (apps shown indented), long-press to rename,
-  reorder or delete (its apps go back to the loose list).
+- Long-press an app to move it to a group (or a new one), open App info, or uninstall it.
+  An app is in at most one group, and stays in All apps as well.
+- Groups are the folders in the Folders section: tap to open (apps shown indented), long-press to rename,
+  reorder or delete (the apps themselves are untouched).
 - Long-press menus and dialogs are wide (90% of the screen) with sharp corners.
 - Pressing Home while the launcher is showing clears the search, collapses everything and scrolls to the top.
 - Back never leaves the launcher.
@@ -37,7 +38,7 @@ A minimal Android home screen: collapsible sections — **Favorites**, **Most us
   (an accessibility service whose only job is the lock action; fingerprint/face unlock keep working).
   The first double-tap without it shows a dialog that links there.
 - **Web apps / "Add to home screen"** (e.g. Firefox): the launcher accepts these pin requests and lists
-  them in All apps like any app (favorites, groups, search all work). Long-press → "Remove from launcher".
+  them in All apps like any app (groups and search work). Long-press → "Remove from launcher".
   Android only shows a launcher the shortcuts pinned *to it*, so ones added while another launcher was
   the default have to be added again from the browser.
 - Work-profile apps are included and shown with the briefcase badge.
@@ -50,7 +51,7 @@ A minimal Android home screen: collapsible sections — **Favorites**, **Most us
 |---|---|
 | `app/src/main/java/dev/sondre/launcher/AppSearch.kt` | Pure ranking and sections logic (unit tested) |
 | `.../AppRepository.kt` | App list (`LauncherApps`), launching, square icon rendering, change callbacks |
-| `.../UsageStore.kt` | Favorites, groups and launch counts (SharedPreferences) |
+| `.../UsageStore.kt` | Groups and launch counts (SharedPreferences) |
 | `.../SubItems.kt` | In-app search sources: app shortcuts and contacts, and launching them |
 | `.../LockService.kt` | Accessibility service used only to lock the screen (double-tap) |
 | `.../Clock.kt` | Home-screen clock (minute ticks, locale date) and opening the alarms list |

@@ -9,7 +9,7 @@ import org.json.JSONObject
 import java.util.UUID
 
 /**
- * Favorites, groups and launch counts, persisted in SharedPreferences.
+ * Groups and launch counts, persisted in SharedPreferences.
  * We count launches ourselves instead of using UsageStatsManager, which would need
  * the user to grant a special permission in Settings.
  */
@@ -17,12 +17,6 @@ class UsageStore(context: Context) {
 
     private val prefs = context.getSharedPreferences("launcher", Context.MODE_PRIVATE)
     private val countPrefs = context.getSharedPreferences("launch_counts", Context.MODE_PRIVATE)
-
-    private val _favorites = MutableStateFlow(
-        prefs.getString(KEY_FAVORITES, "").orEmpty().split('\n').filter { it.isNotEmpty() }
-    )
-    /** Favorite app keys, in the order they were added. */
-    val favorites: StateFlow<List<String>> = _favorites.asStateFlow()
 
     private val _groups = MutableStateFlow(decodeGroups(prefs.getString(KEY_GROUPS, null)))
     /** Groups in user-defined order. */
@@ -37,13 +31,6 @@ class UsageStore(context: Context) {
         val next = (_counts.value[key] ?: 0) + 1
         _counts.value = _counts.value + (key to next)
         countPrefs.edit().putInt(key, next).apply()
-    }
-
-    fun toggleFavorite(key: String) {
-        val current = _favorites.value
-        val next = if (key in current) current - key else current + key
-        _favorites.value = next
-        prefs.edit().putString(KEY_FAVORITES, next.joinToString("\n")).apply()
     }
 
     /** Set once the user declines contact search, so we stop offering it. */
@@ -61,7 +48,7 @@ class UsageStore(context: Context) {
     fun renameGroup(id: String, name: String) =
         saveGroups(_groups.value.map { if (it.id == id) it.copy(name = name.trim()) else it })
 
-    /** Apps in the group go back to the ungrouped list. */
+    /** Deletes the group; its apps are untouched (they're still in All apps). */
     fun deleteGroup(id: String) = saveGroups(_groups.value.filterNot { it.id == id })
 
     fun moveGroup(id: String, delta: Int) {
@@ -101,7 +88,6 @@ class UsageStore(context: Context) {
     }
 
     private companion object {
-        const val KEY_FAVORITES = "favorites"
         const val KEY_GROUPS = "groups"
         const val KEY_CONTACTS_PROMPT_DISMISSED = "contacts_prompt_dismissed"
     }

@@ -147,32 +147,25 @@ object AppSearch {
     }
 
     data class Sections<T>(
-        val favorites: List<T>,
         val frequent: List<T>,
         val groups: List<GroupSection<T>>,
-        /** Apps not in any group. */
-        val ungrouped: List<T>,
     )
 
     /**
+     * Folders and Most used. "All apps" is simply [all]: apps in a group stay in it too.
      * @param all every app, alphabetical; group members keep this order
-     * @param favoriteKeys favorites in user-defined order
      * @param groups groups in user-defined order; keys of uninstalled apps are skipped
      * @param counts launch count per key
      */
     fun <T> sections(
         all: List<T>,
         key: (T) -> String,
-        favoriteKeys: List<String>,
         groups: List<AppGroup>,
         counts: Map<String, Int>,
         frequentLimit: Int,
     ): Sections<T> {
-        val byKey = all.associateBy(key)
-        val favorites = favoriteKeys.mapNotNull { byKey[it] }
-        val favSet = favoriteKeys.toSet()
         val frequent = all
-            .filter { key(it) !in favSet && (counts[key(it)] ?: 0) > 0 }
+            .filter { (counts[key(it)] ?: 0) > 0 }
             .sortedByDescending { counts[key(it)] ?: 0 } // stable: ties stay alphabetical
             .take(frequentLimit)
 
@@ -182,10 +175,8 @@ object AppSearch {
         val members = all.filter { key(it) in groupOf }.groupBy { groupOf.getValue(key(it)) }
 
         return Sections(
-            favorites = favorites,
             frequent = frequent,
             groups = groups.map { GroupSection(it, members[it.id].orEmpty()) },
-            ungrouped = all.filter { key(it) !in groupOf },
         )
     }
 }

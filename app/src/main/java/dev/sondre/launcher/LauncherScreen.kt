@@ -47,7 +47,6 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -206,12 +205,10 @@ fun LauncherScreen(vm: LauncherViewModel) {
             AppRow(
                 app = app,
                 indent = indent,
-                isFavorite = app.key in state.favoriteKeys,
                 group = state.groupOfApp[app.key],
                 loadIcon = { a, px -> withContext(Dispatchers.IO) { vm.repository.loadIcon(a, px) } },
                 cachedIcon = vm.repository::cachedIcon,
                 onClick = { vm.launch(app) },
-                onToggleFavorite = { vm.toggleFavorite(app) },
                 onPickGroup = { dialog = DialogState.PickGroup(app) },
                 onRemoveFromGroup = { vm.moveToGroup(app, null) },
                 onAppInfo = { vm.openAppInfo(app) },
@@ -281,13 +278,18 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         lastBlankTap = now to local
                     }
                 }
-                // On the bare home screen: swipe up opens Favorites + All apps,
+                // On the bare home screen: swipe up opens Folders + Most used,
                 // swipe down pulls down the notification shade.
-                .onVerticalSwipe(
-                    enabled = clockShown,
+                // Whenever not searching: swipe right opens everything (incl. every folder),
+                // swipe left closes the folders, then everything.
+                .onSwipe(
+                    verticalEnabled = clockShown,
+                    horizontalEnabled = !state.isSearching && !searchFocused,
                     minDistance = Style.swipeDistance,
                     onUp = vm::expandHome,
                     onDown = { expandNotifications(context) },
+                    onRight = vm::expandAll,
+                    onLeft = vm::swipeClose,
                 ),
         ) {
             if (state.isSearching) {
@@ -312,29 +314,16 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     }
                 }
             } else {
-                section(
-                    id = SectionId.FAVORITES, title = "Favorites", icon = Icons.Filled.Star,
-                    apps = state.favorites,
-                    state = state, onToggle = vm::toggleSection, row = row,
-                    emptyHint = "Long-press an app to add it here",
-                )
-                section(
-                    id = SectionId.FREQUENT, title = "Most used", icon = Icons.Filled.Schedule,
-                    apps = state.frequent,
-                    state = state, onToggle = vm::toggleSection, row = row,
-                    emptyHint = "Apps you open often will show up here",
-                )
                 val groups = state.groups
                 section(
-                    id = SectionId.OTHER,
-                    title = "All apps",
-                    icon = Icons.Filled.Apps,
-                    apps = state.ungrouped,
-                    count = state.ungrouped.size + groups.sumOf { it.apps.size },
+                    id = SectionId.FOLDERS,
+                    title = "Folders",
+                    icon = Icons.Filled.Folder,
+                    apps = emptyList(),
+                    count = groups.size,
                     state = state, onToggle = vm::toggleSection, row = row,
-                    letterDividers = true,
+                    emptyHint = "Long-press an app and choose \"Move to group\"",
                 ) {
-                    // Groups live inside "All apps", above the ungrouped apps, like folders.
                     groups.forEachIndexed { index, (group, apps) ->
                         val groupId = SectionId.group(group.id)
                         val open = groupId in state.expanded
@@ -365,6 +354,21 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         }
                     }
                 }
+                section(
+                    id = SectionId.FREQUENT, title = "Most used", icon = Icons.Filled.Schedule,
+                    apps = state.frequent,
+                    state = state, onToggle = vm::toggleSection, row = row,
+                    emptyHint = "Apps you open often will show up here",
+                )
+                // Every app, A–Z: apps in folders are listed here too.
+                section(
+                    id = SectionId.OTHER,
+                    title = "All apps",
+                    icon = Icons.Filled.Apps,
+                    apps = state.all,
+                    state = state, onToggle = vm::toggleSection, row = row,
+                    letterDividers = true,
+                )
             }
         }
         } // Box(clock + list)
@@ -479,31 +483,44 @@ private fun Modifier.onUnusedTap(onTap: (local: Offset, root: Offset) -> Unit): 
  * Initial pass and only consumes the rest of a gesture once it has fired, so normal scrolling
  * is untouched (and is off anyway while [enabled] is false).
  */
-private fun Modifier.onVerticalSwipe(
-    enabled: Boolean,
+private fun Modifier.onSwipe(
+    verticalEnabled: Boolean,
+    horizontalEnabled: Boolean,
     minDistance: Dp,
     onUp: () -> Unit,
     onDown: () -> Unit,
+    onRight: () -> Unit,
+    onLeft: () -> Unit,
 ): Modifier = composed {
-    val currentEnabled by rememberUpdatedState(enabled)
+    val currentVertical by rememberUpdatedState(verticalEnabled)
+    val currentHorizontal by rememberUpdatedState(horizontalEnabled)
     val currentOnUp by rememberUpdatedState(onUp)
     val currentOnDown by rememberUpdatedState(onDown)
+    val currentOnRight by rememberUpdatedState(onRight)
+    val currentOnLeft by rememberUpdatedState(onLeft)
     pointerInput(Unit) {
         val threshold = minDistance.toPx()
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-            if (!currentEnabled) return@awaitEachGesture
+            val verticalOn = currentVertical
+            val horizontalOn = currentHorizontal
+            if (!verticalOn && !horizontalOn) return@awaitEachGesture
             var fired = false
             while (true) {
                 val event = awaitPointerEvent(PointerEventPass.Initial)
                 val change = event.changes.firstOrNull { it.id == down.id } ?: break
                 val d = change.position - down.position
-                val vertical = kotlin.math.abs(d.y) > 2 * kotlin.math.abs(d.x)
-                if (!fired && vertical && kotlin.math.abs(d.y) > threshold) {
+                val ax = kotlin.math.abs(d.x)
+                val ay = kotlin.math.abs(d.y)
+                if (!fired && verticalOn && ay > 2 * ax && ay > threshold) {
                     fired = true
                     if (d.y < 0) currentOnUp() else currentOnDown()
+                } else if (!fired && horizontalOn && ax > 2 * ay && ax > threshold) {
+                    fired = true
+                    if (d.x > 0) currentOnRight() else currentOnLeft()
                 }
-                // After firing, the rest of this swipe shouldn't also scroll the list.
+                // After firing, the rest of this swipe shouldn't scroll the list or, since the
+                // release is consumed too, count as a tap on the row it started on.
                 if (fired) change.consume()
                 if (!change.pressed) break
             }
@@ -527,7 +544,7 @@ private fun LazyListScope.section(
     emptyHint: String? = null,
     /** Insert "B ──── B" dividers between letters (for the A–Z list). */
     letterDividers: Boolean = false,
-    /** Extra items shown above [apps] while expanded (the groups, for "All apps"). */
+    /** Extra items shown above [apps] while expanded (the folders, for "Folders"). */
     nested: LazyListScope.() -> Unit = {},
 ) {
     val expanded = id in state.expanded
@@ -791,12 +808,10 @@ private fun ContactsPrompt(onAllow: () -> Unit, onDismiss: () -> Unit) {
 @Composable
 private fun AppRow(
     app: AppEntry,
-    isFavorite: Boolean,
     group: AppGroup?,
     loadIcon: suspend (AppEntry, Int) -> ImageBitmap?,
     cachedIcon: (AppEntry, Int) -> ImageBitmap?,
     onClick: () -> Unit,
-    onToggleFavorite: () -> Unit,
     onPickGroup: () -> Unit,
     onRemoveFromGroup: () -> Unit,
     onAppInfo: () -> Unit,
@@ -840,10 +855,9 @@ private fun AppRow(
             expanded = menuOpen,
             onDismiss = { menuOpen = false },
             actions = if (app.isOtherHome) {
-                // Search-only (One UI Home): favorites/groups would hide it, and it can't be uninstalled.
+                // Search-only (One UI Home): a group would show it outside search, and it can't be uninstalled.
                 listOf(MenuAction("App info", onAppInfo))
             } else buildList {
-                add(MenuAction(if (isFavorite) "Remove from favorites" else "Add to favorites", onToggleFavorite))
                 add(MenuAction(if (group == null) "Move to group…" else "Move to another group…", onPickGroup))
                 if (group != null) add(MenuAction("Remove from \"${group.name}\"", onRemoveFromGroup))
                 if (app.isShortcut) {
