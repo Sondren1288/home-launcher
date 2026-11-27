@@ -9,7 +9,8 @@ import org.json.JSONObject
 import java.util.UUID
 
 /**
- * Groups and launch counts, persisted in SharedPreferences.
+ * Groups, launch counts/scores, hidden apps and custom names, persisted in SharedPreferences.
+ * Keys are [AppEntry.key]s.
  * We count launches ourselves instead of using UsageStatsManager, which would need
  * the user to grant a special permission in Settings.
  */
@@ -17,6 +18,8 @@ class UsageStore(context: Context) {
 
     private val prefs = context.getSharedPreferences("launcher", Context.MODE_PRIVATE)
     private val countPrefs = context.getSharedPreferences("launch_counts", Context.MODE_PRIVATE)
+    /** "score@epochMs" per app; see [Frecency]. */
+    private val scorePrefs = context.getSharedPreferences("launch_scores", Context.MODE_PRIVATE)
 
     private val _groups = MutableStateFlow(decodeGroups(prefs.getString(KEY_GROUPS, null)))
     /** Groups in user-defined order. */
@@ -25,12 +28,69 @@ class UsageStore(context: Context) {
     private val _counts = MutableStateFlow(
         countPrefs.all.mapNotNull { (k, v) -> (v as? Int)?.let { k to it } }.toMap()
     )
+    /** Lifetime launch counts. Kept as a record; ranking uses [launchScores]. */
     val launchCounts: StateFlow<Map<String, Int>> = _counts.asStateFlow()
 
-    fun recordLaunch(key: String) {
+    private val _scores = MutableStateFlow(loadScores())
+    /** Launch scores, decayed with [Frecency] when read. */
+    val launchScores: StateFlow<Map<String, Frecency.Usage>> = _scores.asStateFlow()
+
+    private val _hidden = MutableStateFlow(prefs.getStringSet(KEY_HIDDEN, null).orEmpty().toSet())
+    /** Apps hidden from the lists. They're still found by search. */
+    val hidden: StateFlow<Set<String>> = _hidden.asStateFlow()
+
+    private val _labels = MutableStateFlow(decodeLabels(prefs.getString(KEY_LABELS, null)))
+    /** Names the user gave apps, by key. */
+    val customLabels: StateFlow<Map<String, String>> = _labels.asStateFlow()
+
+    fun recordLaunch(key: String, now: Long = System.currentTimeMillis()) {
         val next = (_counts.value[key] ?: 0) + 1
         _counts.value = _counts.value + (key to next)
         countPrefs.edit().putInt(key, next).apply()
+
+        val usage = Frecency.bump(_scores.value[key], now)
+        _scores.value = _scores.value + (key to usage)
+        scorePrefs.edit().putString(key, "${usage.score}@${usage.at}").apply()
+    }
+
+    /**
+     * Scores from prefs. On first run after the upgrade there are none yet, so seed them from
+     * the lifetime counts as if those launches happened now: the old ranking carries over and
+     * then fades like any other history.
+     */
+    private fun loadScores(): Map<String, Frecency.Usage> {
+        val stored = scorePrefs.all.mapNotNull { (k, v) ->
+            val parts = (v as? String)?.split('@') ?: return@mapNotNull null
+            val score = parts.getOrNull(0)?.toDoubleOrNull() ?: return@mapNotNull null
+            val at = parts.getOrNull(1)?.toLongOrNull() ?: return@mapNotNull null
+            k to Frecency.Usage(score, at)
+        }.toMap()
+        if (stored.isNotEmpty() || _counts.value.isEmpty()) return stored
+        val now = System.currentTimeMillis()
+        val seeded = _counts.value.mapValues { (_, n) -> Frecency.Usage(n.toDouble(), now) }
+        scorePrefs.edit().apply { seeded.forEach { (k, u) -> putString(k, "${u.score}@${u.at}") } }.apply()
+        return seeded
+    }
+
+    fun setHidden(key: String, hidden: Boolean) {
+        val next = if (hidden) _hidden.value + key else _hidden.value - key
+        _hidden.value = next
+        // Write a copy: SharedPreferences must not be handed a set it may later see mutated.
+        prefs.edit().putStringSet(KEY_HIDDEN, HashSet(next)).apply()
+    }
+
+    /** Gives the app a custom name, or restores its own name when [label] is null or blank. */
+    fun setCustomLabel(key: String, label: String?) {
+        val name = label?.trim().orEmpty()
+        val next = if (name.isEmpty()) _labels.value - key else _labels.value + (key to name)
+        _labels.value = next
+        prefs.edit().putString(KEY_LABELS, JSONObject(next as Map<*, *>).toString()).apply()
+    }
+
+    private fun decodeLabels(json: String?): Map<String, String> {
+        if (json.isNullOrEmpty()) return emptyMap()
+        val o = JSONObject(json)
+        return o.keys().asSequence().associateWith { o.getString(it) }
     }
 
     /** Set once the user declines contact search, so we stop offering it. */
@@ -90,5 +150,7 @@ class UsageStore(context: Context) {
     private companion object {
         const val KEY_GROUPS = "groups"
         const val KEY_CONTACTS_PROMPT_DISMISSED = "contacts_prompt_dismissed"
+        const val KEY_HIDDEN = "hidden_apps"
+        const val KEY_LABELS = "custom_labels"
     }
 }

@@ -15,19 +15,27 @@ A minimal Android home screen: collapsible sections — **Folders** (your groups
   The wallpaper is shown as-is until a section is expanded or the search is in use, then it's darkened.
 - Tapping anywhere outside the search bar, or hiding the keyboard, ends the search focus (no blinking cursor).
 - A large clock (JetBrains Mono Bold) with the date sits to the right of the collapsed section tiles; tap it to open
-  the alarms in your clock app. It's drawn behind the list and fades out when a section opens or you search.
+  your clock app (alarms, timer, stopwatch). It's drawn behind the list and fades out when a section opens or you search.
 - Type to filter. Results grow upwards from the search bar, best match at the bottom (next to your thumb).
   Search covers all apps, regardless of what's collapsed. Matching ignores case and accents and ranks: prefix > word prefix > initials
-  (`gm` → Google Maps) > substring > subsequence. Ties go to the app you launch most.
+  (`gm` → Google Maps) > substring > subsequence. Ties go to the app you use most (see Most used below).
   Press Go/Enter on the keyboard to open the top result.
+  When nothing matches, the result is "Search the web for …" (also what Go does then). It uses the phone's
+  web search app; Android asks which one the first time, and "Alltid" makes it remember.
 - Search also finds things *inside* apps and shows them indented under the app they belong to
   (a contact's name → WhatsApp / that contact, opening the chat):
   - **App shortcuts** (recent chats, "New incognito tab"…). Needs this to be the default home app.
   - **Contacts** (optional; asked for in the search results): every contact under the Contacts app,
     plus the actions apps attach to contacts (WhatsApp, Signal, Telegram…) under those apps.
   These only match on name/word prefixes, to keep a big contact list from flooding the results.
-- Long-press an app to move it to a group (or a new one), open App info, or uninstall it.
+- Long-press an app to move it to a group (or a new one), rename it, hide it, open App info, or uninstall it.
   An app is in at most one group, and stays in All apps as well.
+- **Rename:** the new name is shown everywhere and sorts A–Z by it, but search finds the app by
+  both names (results show the original name next to the new one). "Restore name" in the same menu,
+  or renaming to an empty name, undoes it.
+- **Hide:** a hidden app disappears from All apps, Most used and its folder (it stays a member and
+  comes back there when unhidden), but search still finds it, marked "hidden". Unhide it from its
+  long-press menu in the search results.
 - Groups are the folders in the Folders section: tap to open (apps shown indented), long-press to rename,
   reorder or delete (the apps themselves are untouched).
 - Long-press menus and dialogs are wide (90% of the screen) with sharp corners.
@@ -43,7 +51,10 @@ A minimal Android home screen: collapsible sections — **Folders** (your groups
   the default have to be added again from the browser.
 - Work-profile apps are included and shown with the briefcase badge.
 - Apps that are installed, removed or updated show up right away.
-- "Most used" comes from launch counts the launcher records itself, so no special permission is needed.
+- "Most used" comes from launches the launcher records itself, so no special permission is needed.
+  Every launch adds 1 to an app's score, and scores halve every 14 days (`Frecency.HALF_LIFE_DAYS`):
+  apps you open often rank high, and old habits fade. The lifetime counts from before this
+  existed were carried over as a starting score.
 
 ## Layout
 
@@ -51,10 +62,11 @@ A minimal Android home screen: collapsible sections — **Folders** (your groups
 |---|---|
 | `app/src/main/java/dev/sondre/launcher/AppSearch.kt` | Pure ranking and sections logic (unit tested) |
 | `.../AppRepository.kt` | App list (`LauncherApps`), launching, square icon rendering, change callbacks |
-| `.../UsageStore.kt` | Groups and launch counts (SharedPreferences) |
+| `.../Frecency.kt` | "Most used" score: launches that fade over time (unit tested) |
+| `.../UsageStore.kt` | Groups, launch counts/scores, hidden apps, custom names (SharedPreferences) |
 | `.../SubItems.kt` | In-app search sources: app shortcuts and contacts, and launching them |
 | `.../LockService.kt` | Accessibility service used only to lock the screen (double-tap) |
-| `.../Clock.kt` | Home-screen clock (minute ticks, locale date) and opening the alarms list |
+| `.../Clock.kt` | Home-screen clock (minute ticks, locale date) and opening the clock app |
 | `.../LauncherViewModel.kt` | Combines the above into `UiState` |
 | `.../LauncherScreen.kt` | Compose UI. Tweak sizes and colors in `Style` at the top |
 | `.../MainActivity.kt` | HOME activity, edge-to-edge, Home-press reset |

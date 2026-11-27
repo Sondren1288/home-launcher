@@ -42,6 +42,10 @@ data class AppEntry(
      * launcher. Only shown in search results, never in the sections.
      */
     val isOtherHome: Boolean = false,
+    /** The app's own name when the user renamed it ([label] is then the custom name). */
+    val ownLabel: String? = null,
+    /** Hidden by the user: only shown in search. */
+    val hidden: Boolean = false,
 ) {
     val isShortcut get() = shortcut != null
 }

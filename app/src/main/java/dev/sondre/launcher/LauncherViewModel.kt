@@ -1,7 +1,10 @@
 package dev.sondre.launcher
 
 import android.app.Application
+import android.app.SearchManager
 import android.content.ActivityNotFoundException
+import android.content.Intent
+import android.net.Uri
 import android.database.ContentObserver
 import android.graphics.Rect
 import android.os.Handler
@@ -28,6 +31,7 @@ import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.text.Collator
 
 /** Ids for collapsible sections. */
 object SectionId {
@@ -84,25 +88,29 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
 
     private data class UserData(
         val groups: List<AppGroup>,
-        val counts: Map<String, Int>,
+        val scores: Map<String, Frecency.Usage>,
+        val hidden: Set<String>,
+        val labels: Map<String, String>,
     )
 
-    private val userData = combine(usage.groups, usage.launchCounts, ::UserData)
+    private val userData = combine(usage.groups, usage.launchScores, usage.hidden, usage.customLabels, ::UserData)
 
     /** Shortcuts and contacts, attached to the app they belong to. */
     private val subItems = combine(apps, shortcuts, contacts) { apps, sc, ct -> attachToApps(sc + ct, apps) }
 
     val state: StateFlow<UiState> =
-        combine(apps, snapshotFlow { query }, userData, expanded, subItems) { apps, query, user, expanded, subs ->
-            // Other home apps (One UI Home) are search-only.
-            val listed = apps.filterNot { it.isOtherHome }
-            val s = AppSearch.sections(listed, { it.key }, user.groups, user.counts, FREQUENT_LIMIT)
+        combine(apps, snapshotFlow { query }, userData, expanded, subItems) { raw, query, user, expanded, subs ->
+            val apps = withUserData(raw, user.hidden, user.labels)
+            val scores = scoresNow(user.scores)
+            // Other home apps (One UI Home) and hidden apps are search-only.
+            val listed = apps.filterNot { it.isOtherHome || it.hidden }
+            val s = AppSearch.sections(listed, { it.key }, user.groups, scores, FREQUENT_LIMIT)
             UiState(
                 query = query,
                 frequent = s.frequent,
                 groups = s.groups,
                 all = listed,
-                results = search(apps, subs, query, user.counts),
+                results = search(apps, subs, query, scores),
                 // reversed() so the first group wins on duplicates, matching AppSearch.sections
                 groupOfApp = user.groups.reversed().flatMap { g -> g.appKeys.map { it to g } }.toMap(),
                 expanded = expanded,
@@ -111,13 +119,36 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
             .flowOn(Dispatchers.Default)
             .stateIn(viewModelScope, SharingStarted.Eagerly, UiState())
 
-    private fun search(apps: List<AppEntry>, subs: List<SubEntry>, query: String, counts: Map<String, Int>) =
+    private fun search(apps: List<AppEntry>, subs: List<SubEntry>, query: String, scores: Map<String, Double>) =
         AppSearch.searchWithChildren(
             items = apps, children = subs, query = query,
             label = { it.label }, key = { it.key },
             childLabel = { it.label }, childOwner = { it.ownerKey },
-            boost = { counts[it.key] ?: 0 },
+            boost = { scores[it.key] ?: 0.0 },
+            // A renamed app is found by its own name too.
+            altLabel = { it.ownLabel },
         )
+
+    private fun scoresNow(scores: Map<String, Frecency.Usage>): Map<String, Double> {
+        val now = System.currentTimeMillis()
+        return scores.mapValues { Frecency.valueAt(it.value, now) }
+    }
+
+    /** Applies custom names (re-sorting A–Z by the shown name) and hidden flags. */
+    private fun withUserData(apps: List<AppEntry>, hidden: Set<String>, labels: Map<String, String>): List<AppEntry> {
+        if (hidden.isEmpty() && labels.isEmpty()) return apps
+        val out = apps.map { a ->
+            val custom = labels[a.key]
+            a.copy(
+                label = custom ?: a.label,
+                ownLabel = if (custom != null) a.label else null,
+                hidden = a.key in hidden,
+            )
+        }
+        if (labels.isEmpty()) return out
+        val collator = Collator.getInstance().apply { strength = Collator.PRIMARY }
+        return out.sortedWith(compareBy(collator) { it.label })
+    }
 
     private val callback = repository.registerCallback(
         onChange = { reload(); reloadShortcuts() },
@@ -262,11 +293,47 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
     /** Go on the keyboard: open the top app, or its first sub-result if only that matched. */
     fun launchTopResult() {
         // Compute from the current text rather than state.results, which may lag a keystroke.
-        val counts = usage.launchCounts.value
+        if (query.isBlank()) return
+        val scores = scoresNow(usage.launchScores.value)
+        val all = withUserData(apps.value, usage.hidden.value, usage.customLabels.value)
         val subs = attachToApps(shortcuts.value + contacts.value, apps.value)
-        val top = search(apps.value, subs, query, counts).firstOrNull() ?: return
+        val top = search(all, subs, query, scores).firstOrNull() ?: return searchWeb()
         if (top.matchedItself || top.children.isEmpty()) launch(top.item) else launchSub(top.children.first())
     }
+
+    /**
+     * Searches the web for the current query: with the phone's search app (Google) if it has
+     * one, else in the browser.
+     */
+    fun searchWeb() {
+        val q = query.trim()
+        if (q.isEmpty()) return
+        val ctx = getApplication<Application>()
+        val webSearch = Intent(Intent.ACTION_WEB_SEARCH).putExtra(SearchManager.QUERY, q)
+        val browser = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com/search?q=" + Uri.encode(q)))
+        for (intent in listOf(webSearch, browser)) {
+            try {
+                ctx.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                query = ""
+                return
+            } catch (e: ActivityNotFoundException) {
+                // try the next one
+            } catch (e: SecurityException) {
+                // try the next one
+            }
+        }
+        toast("No app can search the web")
+    }
+
+    fun setHidden(app: AppEntry, hidden: Boolean) = usage.setHidden(app.key, hidden)
+
+    /** Renames [app]; a blank name or its own name restores the original. */
+    fun rename(app: AppEntry, name: String) {
+        val own = app.ownLabel ?: app.label
+        usage.setCustomLabel(app.key, name.takeUnless { it.trim() == own })
+    }
+
+    fun resetName(app: AppEntry) = usage.setCustomLabel(app.key, null)
 
     fun moveToGroup(app: AppEntry, groupId: String?) = usage.setAppGroup(app.key, groupId)
 

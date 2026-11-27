@@ -100,14 +100,22 @@ private fun rememberNow(): Long {
     return now
 }
 
-/** Opens the default clock app on its alarms list. Never throws. */
-fun openAlarms(context: Context) {
+/**
+ * Opens the full clock app (alarms, timer, stopwatch…), as tapping Samsung's own clock does.
+ * The clock app is whichever app handles "show alarms"; we start its normal launcher entry
+ * rather than the alarm-list screen. Falls back to the alarm list if it has no launcher entry.
+ * Never throws.
+ */
+fun openClock(context: Context) {
+    val showAlarms = Intent(AlarmClock.ACTION_SHOW_ALARMS)
+    val pkg = context.packageManager.resolveActivity(showAlarms, 0)?.activityInfo?.packageName
+    val app = pkg?.let { context.packageManager.getLaunchIntentForPackage(it) }
     try {
-        context.startActivity(Intent(AlarmClock.ACTION_SHOW_ALARMS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        context.startActivity((app ?: showAlarms).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     } catch (e: ActivityNotFoundException) {
         Toast.makeText(context, "No clock app found", Toast.LENGTH_SHORT).show()
     } catch (e: SecurityException) {
         // Some clock apps guard SHOW_ALARMS behind SET_ALARM (declared in the manifest).
-        Toast.makeText(context, "Couldn't open alarms", Toast.LENGTH_SHORT).show()
+        Toast.makeText(context, "Couldn't open the clock", Toast.LENGTH_SHORT).show()
     }
 }

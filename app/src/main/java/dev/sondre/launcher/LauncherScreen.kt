@@ -144,6 +144,7 @@ private val WideDialog = DialogProperties(usePlatformDefaultWidth = false)
 /** Dialogs opened from long-press menus. */
 private sealed interface DialogState {
     data class PickGroup(val app: AppEntry) : DialogState
+    data class RenameApp(val app: AppEntry) : DialogState
     data class RenameGroup(val group: AppGroup) : DialogState
     data class DeleteGroup(val group: AppGroup) : DialogState
 }
@@ -201,10 +202,13 @@ fun LauncherScreen(vm: LauncherViewModel) {
             .background(Color.Black.copy(alpha = scrimAlpha))
             .statusBarsPadding()
     ) {
-        val appRow: @Composable (AppEntry, Dp) -> Unit = { app, indent ->
+        val appRow: @Composable (AppEntry, Dp, Boolean) -> Unit = { app, indent, inSearch ->
             AppRow(
                 app = app,
                 indent = indent,
+                // In search, say why an app looks unfamiliar: renamed, or normally hidden.
+                note = if (!inSearch) null else listOfNotNull(app.ownLabel, "hidden".takeIf { app.hidden })
+                    .joinToString(" · ").ifEmpty { null },
                 group = state.groupOfApp[app.key],
                 loadIcon = { a, px -> withContext(Dispatchers.IO) { vm.repository.loadIcon(a, px) } },
                 cachedIcon = vm.repository::cachedIcon,
@@ -214,9 +218,12 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 onAppInfo = { vm.openAppInfo(app) },
                 onUninstall = { vm.uninstall(app) },
                 onRemoveShortcut = { vm.removeShortcut(app) },
+                onRename = { dialog = DialogState.RenameApp(app) },
+                onResetName = { vm.resetName(app) },
+                onSetHidden = { vm.setHidden(app, it) },
             )
         }
-        val row: @Composable (AppEntry) -> Unit = { appRow(it, 0.dp) }
+        val row: @Composable (AppEntry) -> Unit = { appRow(it, 0.dp, false) }
 
         // The clock sits on the layer *behind* the list and fades out as soon as anything opens,
         // so expanded rows never draw on top of it.
@@ -255,7 +262,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     if (!clockShown) return@onUnusedTap
                     if (clockBounds.contains(root)) {
                         lastBlankTap = null
-                        openAlarms(context)
+                        openClock(context)
                         return@onUnusedTap
                     }
                     // The blank area starts below both the section tiles and the clock.
@@ -297,13 +304,13 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 // bar, so the best match is closest to your thumb. Within a result the app must
                 // still appear above its chats/contacts, so those are emitted first, reversed.
                 if (state.results.isEmpty()) {
-                    item { Hint("No apps match \"${state.query}\"") }
+                    item(key = "web-search") { WebSearchRow(state.query, onClick = vm::searchWeb) }
                 }
                 for (r in state.results) {
                     items(r.children.asReversed(), key = { "res:${r.item.key}:${it.id}" }) { sub ->
                         SubRow(sub.label, onClick = { vm.launchSub(sub) })
                     }
-                    item(key = "res:${r.item.key}") { row(r.item) }
+                    item(key = "res:${r.item.key}") { appRow(r.item, 0.dp, true) }
                 }
                 if (showContactsPrompt) {
                     item(key = "contacts-prompt") {
@@ -350,7 +357,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                                     )
                                 }
                             }
-                            items(apps, key = { "folder:${group.id}:${it.key}" }) { appRow(it, Style.groupIndent) }
+                            items(apps, key = { "folder:${group.id}:${it.key}" }) { appRow(it, Style.groupIndent, false) }
                         }
                     }
                 }
@@ -422,6 +429,16 @@ fun LauncherScreen(vm: LauncherViewModel) {
             current = state.groupOfApp[d.app.key],
             onPick = { vm.moveToGroup(d.app, it.id); dialog = null },
             onCreate = { vm.moveToNewGroup(d.app, it); dialog = null },
+            onDismiss = { dialog = null },
+        )
+        is DialogState.RenameApp -> NameDialog(
+            title = "Rename ${d.app.ownLabel ?: d.app.label}",
+            initial = d.app.label,
+            confirmLabel = "Rename",
+            // Blank is allowed here: it restores the app's own name.
+            allowBlank = true,
+            hint = "Search finds it by both names. Leave empty to restore the original.",
+            onConfirm = { vm.rename(d.app, it); dialog = null },
             onDismiss = { dialog = null },
         )
         is DialogState.RenameGroup -> NameDialog(
@@ -776,6 +793,28 @@ private fun Hint(text: String, modifier: Modifier = Modifier) {
     )
 }
 
+/** Shown when nothing matches: search the web for the query instead. */
+@Composable
+private fun WebSearchRow(query: String, onClick: () -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClickLabel = "Search the web", onClick = onClick)
+            .padding(horizontal = 20.dp, vertical = Style.rowVerticalPadding),
+    ) {
+        Icon(Icons.Filled.Search, contentDescription = null, tint = Style.text, modifier = Modifier.size(Style.iconSize))
+        Spacer(Modifier.width(14.dp))
+        Text(
+            text = "Search the web for \"${query.trim()}\"",
+            color = Style.text,
+            fontSize = Style.labelSize,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
 /** A chat, contact or shortcut, indented under its app so it lines up with the app's name. */
 @Composable
 private fun SubRow(label: String, onClick: () -> Unit) {
@@ -817,8 +856,13 @@ private fun AppRow(
     onAppInfo: () -> Unit,
     onUninstall: () -> Unit,
     onRemoveShortcut: () -> Unit,
+    onRename: () -> Unit,
+    onResetName: () -> Unit,
+    onSetHidden: (Boolean) -> Unit,
     /** Extra start padding, for apps shown inside an open group. */
     indent: Dp = 0.dp,
+    /** Small dim text after the name (in search: the original name, "hidden"). */
+    note: String? = null,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     val iconPx = with(LocalDensity.current) { Style.iconSize.roundToPx() }
@@ -849,7 +893,12 @@ private fun AppRow(
                 fontSize = Style.labelSize,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
             )
+            if (note != null) {
+                Spacer(Modifier.width(8.dp))
+                Text(text = note, color = Style.dim, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
         }
         LauncherMenu(
             expanded = menuOpen,
@@ -860,6 +909,10 @@ private fun AppRow(
             } else buildList {
                 add(MenuAction(if (group == null) "Move to group…" else "Move to another group…", onPickGroup))
                 if (group != null) add(MenuAction("Remove from \"${group.name}\"", onRemoveFromGroup))
+                add(MenuAction("Rename…", onRename))
+                if (app.ownLabel != null) add(MenuAction("Restore name \"${app.ownLabel}\"", onResetName))
+                // Hidden apps only show up in search, which is where they're unhidden.
+                add(if (app.hidden) MenuAction("Unhide") { onSetHidden(false) } else MenuAction("Hide") { onSetHidden(true) })
                 if (app.isShortcut) {
                     // A pinned shortcut / web app: it has no app info or uninstall of its own.
                     add(MenuAction("Remove from launcher", onRemoveShortcut))
@@ -933,8 +986,11 @@ private fun NameDialog(
     confirmLabel: String,
     onConfirm: (String) -> Unit,
     onDismiss: () -> Unit,
+    allowBlank: Boolean = false,
+    hint: String? = null,
 ) {
     var name by remember { mutableStateOf(initial) }
+    val valid = allowBlank || name.isNotBlank()
     AlertDialog(
         onDismissRequest = onDismiss,
         shape = RectangleShape,
@@ -942,18 +998,23 @@ private fun NameDialog(
         modifier = Modifier.fillMaxWidth(Style.menuWidthFraction),
         title = { Text(title) },
         text = {
-            OutlinedTextField(
-                value = name,
-                onValueChange = { name = it },
-                singleLine = true,
-                shape = RectangleShape,
-                modifier = Modifier.fillMaxWidth(),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                keyboardActions = KeyboardActions(onDone = { if (name.isNotBlank()) onConfirm(name) }),
-            )
+            Column {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    singleLine = true,
+                    shape = RectangleShape,
+                    modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { if (valid) onConfirm(name) }),
+                )
+                if (hint != null) {
+                    Text(hint, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
+                }
+            }
         },
         confirmButton = {
-            TextButton(enabled = name.isNotBlank(), onClick = { onConfirm(name) }) { Text(confirmLabel) }
+            TextButton(enabled = valid, onClick = { onConfirm(name) }) { Text(confirmLabel) }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )

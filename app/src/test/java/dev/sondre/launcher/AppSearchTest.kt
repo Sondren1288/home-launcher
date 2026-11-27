@@ -8,7 +8,7 @@ class AppSearchTest {
 
     private val apps = listOf("Calculator", "Calendar", "Camera", "Gmail", "Google Maps", "Maps.me", "Yr", "Ruter")
 
-    private fun search(q: String, boost: (String) -> Int = { 0 }) = AppSearch.filter(apps, q, { it }, boost)
+    private fun search(q: String, boost: (String) -> Double = { 0.0 }) = AppSearch.filter(apps, q, { it }, boost)
 
     @Test
     fun `empty query matches everything in original order`() {
@@ -44,12 +44,12 @@ class AppSearchTest {
 
     @Test
     fun `boost breaks ties within the same match quality`() {
-        assertEquals(listOf("Calendar", "Calculator", "Camera"), search("ca") { if (it == "Calendar") 10 else 0 })
+        assertEquals(listOf("Calendar", "Calculator", "Camera"), search("ca") { if (it == "Calendar") 10.0 else 0.0 })
     }
 
     @Test
-    fun `frequent is sorted by count, ties keep list order, and limited`() {
-        val counts = mapOf("Yr" to 3, "Gmail" to 9, "Camera" to 1, "Ruter" to 3)
+    fun `frequent is sorted by score, ties keep list order, and limited`() {
+        val counts = mapOf("Yr" to 3.0, "Gmail" to 9.0, "Camera" to 1.0, "Ruter" to 3.0)
         val s = AppSearch.sections(apps, { it }, emptyList(), counts, frequentLimit = 3)
         assertEquals(listOf("Gmail", "Yr", "Ruter"), s.frequent)
     }
@@ -71,7 +71,7 @@ class AppSearchTest {
     @Test
     fun `frequent still includes grouped apps`() {
         val groups = listOf(AppGroup("g", "G", listOf("Gmail", "Yr")))
-        val s = AppSearch.sections(apps, { it }, groups, mapOf("Gmail" to 2), frequentLimit = 5)
+        val s = AppSearch.sections(apps, { it }, groups, mapOf("Gmail" to 2.0), frequentLimit = 5)
         assertEquals(listOf("Gmail"), s.frequent)
     }
 
@@ -82,10 +82,25 @@ class AppSearchTest {
     )
     private val withSubs = listOf("Chrome", "Contacts", "Dodo", "WhatsApp")
 
-    private fun deep(q: String, boost: (String) -> Int = { 0 }) = AppSearch.searchWithChildren(
+    private fun deep(
+        q: String,
+        boost: (String) -> Double = { 0.0 },
+        altLabel: (String) -> String? = { null },
+    ) = AppSearch.searchWithChildren(
         withSubs, subs, q, label = { it }, key = { it },
-        childLabel = { it.second }, childOwner = { it.first }, boost = boost,
+        childLabel = { it.second }, childOwner = { it.first }, boost = boost, altLabel = altLabel,
     ).map { m -> m.item to m.children.map { it.second } }
+
+    @Test
+    fun `a renamed app is found by both its new and its own name`() {
+        // "Dodo" renamed: its own name is "Ruter".
+        val own = { a: String -> if (a == "Dodo") "Ruter" else null }
+        assertEquals(listOf("Dodo"), deep("rut", altLabel = own).map { it.first })
+        assertEquals(listOf("Dodo"), deep("dod", altLabel = own).map { it.first })
+        // The better of the two names decides the rank.
+        assertEquals(0, AppSearch.bestScore("My bank", "BankID", "bank"))
+        assertNull(AppSearch.bestScore("My bank", "BankID", "xyz"))
+    }
 
     @Test
     fun `children appear under their app, and the app is shown even if only a child matches`() {
@@ -112,7 +127,7 @@ class AppSearchTest {
 
     @Test
     fun `boost orders apps that rank equally`() {
-        assertEquals(listOf("WhatsApp", "Contacts"), deep("dorian") { if (it == "WhatsApp") 5 else 0 }.map { it.first })
+        assertEquals(listOf("WhatsApp", "Contacts"), deep("dorian", boost = { if (it == "WhatsApp") 5.0 else 0.0 }).map { it.first })
     }
 
     @Test

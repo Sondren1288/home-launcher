@@ -48,18 +48,27 @@ object AppSearch {
         return i == needle.length
     }
 
+    /** The better [score] of [label] and [altLabel] (e.g. an app's own name when the user renamed it). */
+    fun bestScore(label: String, altLabel: String?, query: String): Int? {
+        val a = score(label, query)
+        val b = altLabel?.let { score(it, query) }
+        return if (a == null) b else if (b == null) a else minOf(a, b)
+    }
+
     /**
      * Filter [items] by [query]. Ordered by match quality, then by [boost] (higher first,
-     * e.g. launch count), then by original order (the input is expected to be alphabetical).
+     * e.g. launch score), then by original order (the input is expected to be alphabetical).
+     * An item also matches on its [altLabel], if it has one.
      */
     fun <T> filter(
         items: List<T>,
         query: String,
         label: (T) -> String,
-        boost: (T) -> Int = { 0 },
+        boost: (T) -> Double = { 0.0 },
+        altLabel: (T) -> String? = { null },
     ): List<T> =
-        items.mapNotNull { item -> score(label(item), query)?.let { s -> Triple(item, s, boost(item)) } }
-            .sortedWith(compareBy<Triple<T, Int, Int>> { it.second }.thenByDescending { it.third })
+        items.mapNotNull { item -> bestScore(label(item), altLabel(item), query)?.let { s -> Triple(item, s, boost(item)) } }
+            .sortedWith(compareBy<Triple<T, Int, Double>> { it.second }.thenByDescending { it.third })
             .map { it.first }
 
     /** An app in the search results, with matching sub-items (chats, contacts…) beneath it. */
@@ -71,7 +80,8 @@ object AppSearch {
      * matching by their own name come first, then higher [boost], then input order.
      *
      * Children only match on prefix / word prefix / initials ([childMaxScore]) so a large
-     * contact list doesn't flood the results with loose matches.
+     * contact list doesn't flood the results with loose matches. An app also matches on its
+     * [altLabel], if it has one.
      */
     fun <T, C> searchWithChildren(
         items: List<T>,
@@ -81,9 +91,10 @@ object AppSearch {
         key: (T) -> String,
         childLabel: (C) -> String,
         childOwner: (C) -> String,
-        boost: (T) -> Int = { 0 },
+        boost: (T) -> Double = { 0.0 },
         childMaxScore: Int = 2,
         childLimit: Int = 5,
+        altLabel: (T) -> String? = { null },
     ): List<Match<T, C>> {
         if (query.isBlank()) return emptyList()
         val kids: Map<String, List<Pair<C, Int>>> = children
@@ -93,9 +104,9 @@ object AppSearch {
                 v.sortedWith(compareBy<Pair<C, Int>> { it.second }.thenBy { normalize(childLabel(it.first)) })
             }
 
-        data class Ranked(val match: Match<T, C>, val rank: Int, val boost: Int)
+        data class Ranked(val match: Match<T, C>, val rank: Int, val boost: Double)
         return items.mapNotNull { item ->
-            val own = score(label(item), query)
+            val own = bestScore(label(item), altLabel(item), query)
             val mine = kids[key(item)].orEmpty()
             if (own == null && mine.isEmpty()) return@mapNotNull null
             val rank = minOf(own ?: Int.MAX_VALUE, mine.firstOrNull()?.second ?: Int.MAX_VALUE)
@@ -155,18 +166,18 @@ object AppSearch {
      * Folders and Most used. "All apps" is simply [all]: apps in a group stay in it too.
      * @param all every app, alphabetical; group members keep this order
      * @param groups groups in user-defined order; keys of uninstalled apps are skipped
-     * @param counts launch count per key
+     * @param scores launch score per key (see [Frecency]); higher is used more
      */
     fun <T> sections(
         all: List<T>,
         key: (T) -> String,
         groups: List<AppGroup>,
-        counts: Map<String, Int>,
+        scores: Map<String, Double>,
         frequentLimit: Int,
     ): Sections<T> {
         val frequent = all
-            .filter { (counts[key(it)] ?: 0) > 0 }
-            .sortedByDescending { counts[key(it)] ?: 0 } // stable: ties stay alphabetical
+            .filter { (scores[key(it)] ?: 0.0) > 0.0 }
+            .sortedByDescending { scores[key(it)] ?: 0.0 } // stable: ties stay alphabetical
             .take(frequentLimit)
 
         // First group wins if a key somehow ended up in two groups.
