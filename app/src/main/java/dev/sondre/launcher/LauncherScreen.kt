@@ -43,6 +43,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Apps
+import androidx.compose.material.icons.filled.Calculate
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
@@ -132,6 +133,8 @@ private object Style {
     /** Font of the clock's time: JetBrains Mono, weight 100–800 (700 = Bold). */
     val clockFont = ClockFonts.jetBrainsMono(500)
     val clockTop = 6.dp
+    /** Calculator result in search. */
+    val calcSize = 22.sp
     /** Letter in the A–Z dividers. */
     val letterSize = 11.sp
     /** How far a swipe on the home screen must travel (up: open lists, down: notifications). */
@@ -303,7 +306,11 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 // reverseLayout: the first item emitted sits at the bottom, next to the search
                 // bar, so the best match is closest to your thumb. Within a result the app must
                 // still appear above its chats/contacts, so those are emitted first, reversed.
-                if (state.results.isEmpty()) {
+                // A calculation sits closest to the search bar; it's what you typed it for.
+                val calc = state.calculation
+                if (calc != null) {
+                    item(key = "calc") { CalcRow(calc, onClick = { vm.copyResult(calc) }) }
+                } else if (state.results.isEmpty()) {
                     item(key = "web-search") { WebSearchRow(state.query, onClick = vm::searchWeb) }
                 }
                 for (r in state.results) {
@@ -791,6 +798,32 @@ private fun Hint(text: String, modifier: Modifier = Modifier) {
         fontSize = 14.sp,
         modifier = modifier.padding(horizontal = 20.dp, vertical = 8.dp),
     )
+}
+
+/** The answer to arithmetic typed into the search bar. Tap (or Go) copies it. */
+@Composable
+private fun CalcRow(result: String, onClick: () -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClickLabel = "Copy result", onClick = onClick)
+            .padding(horizontal = 20.dp, vertical = Style.rowVerticalPadding),
+    ) {
+        Icon(Icons.Filled.Calculate, contentDescription = null, tint = Style.text, modifier = Modifier.size(Style.iconSize))
+        Spacer(Modifier.width(14.dp))
+        Text(
+            text = "= $result",
+            color = Style.text,
+            fontSize = Style.calcSize,
+            fontFamily = FontFamily.Monospace,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false),
+        )
+        Spacer(Modifier.width(8.dp))
+        Text("tap to copy", color = Style.dim, fontSize = 13.sp, maxLines = 1)
+    }
 }
 
 /** Shown when nothing matches: search the web for the query instead. */

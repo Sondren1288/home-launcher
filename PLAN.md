@@ -4,23 +4,20 @@ Features agreed on but not built yet, to go through one at a time. Each one gets
 design pass before building. Highest priority first.
 
 Already built: hiding apps, recency-weighted "Most used", web search when nothing matches,
-renaming apps (searchable by both names).
+renaming apps (searchable by both names), and the first quick tools: an inline calculator
+and jumping to Settings pages.
 
-## 1. Quick tools in search
+## 1. More quick tools in search
 
-Answers and actions straight from the search bar, without opening an app first.
-There are many possible tools, so start by agreeing on which ones and how they look.
-
-Candidates:
-- **Calculator:** `12*7`, `15% of 340`, `(3+4)/2` shows the result inline. Tapping it copies the result.
-- **Settings pages:** "wifi", "bluetooth", "battery", "display", "notifications"… open that
-  Settings screen directly (`Settings.ACTION_*` intents). Matches should work in Norwegian and English.
+Answers and actions straight from the search bar. The calculator and Settings pages are done;
+these are the remaining candidates, each to be agreed on before building:
 - **Unit and currency conversion:** `5 km in mi`, `100 usd in nok` (currency needs rates, so network access; maybe skip).
 - **Timer / alarm:** `timer 10m`, `alarm 7:30` through `AlarmClock.ACTION_SET_TIMER` / `ACTION_SET_ALARM`
   (the SET_ALARM permission is already declared).
 - **Dial / message a number:** a typed phone number offers "Call" / "Message".
 
-Open questions: which tools, where results sit relative to app results, and whether Go runs them.
+Settled by the first tools: a tool's answer sits closest to the search bar (below app results),
+and Go acts on it (the calculator copies its result).
 
 ## 2. Back up and restore launcher data
 

@@ -126,6 +126,21 @@ class AppSearchTest {
     }
 
     @Test
+    fun `children match on their keywords too, once each`() {
+        val pages = listOf("Settings" to "Wi-Fi", "Settings" to "Sound")
+        val keywords = mapOf("Wi-Fi" to listOf("wlan", "trådløst", "wifi"), "Sound" to listOf("lyd", "volum"))
+        fun find(q: String) = AppSearch.searchWithChildren(
+            listOf("Settings", "Lydbok"), pages, q, label = { it }, key = { it },
+            childLabel = { it.second }, childOwner = { it.first },
+            childKeywords = { keywords[it.second].orEmpty() },
+        ).map { m -> m.item to m.children.map { it.second } }
+        assertEquals(listOf("Settings" to listOf("Wi-Fi")), find("wlan"))
+        assertEquals(listOf("Settings" to listOf("Wi-Fi")), find("w")) // "Wi-Fi", "wlan" and "wifi" all match
+        assertEquals(listOf("Settings" to listOf("Wi-Fi")), find("tradl")) // accents ignored
+        assertEquals(listOf("Lydbok" to emptyList(), "Settings" to listOf("Sound")), find("lyd"))
+    }
+
+    @Test
     fun `boost orders apps that rank equally`() {
         assertEquals(listOf("WhatsApp", "Contacts"), deep("dorian", boost = { if (it == "WhatsApp") 5.0 else 0.0 }).map { it.first })
     }

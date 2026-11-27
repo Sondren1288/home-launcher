@@ -95,10 +95,15 @@ object AppSearch {
         childMaxScore: Int = 2,
         childLimit: Int = 5,
         altLabel: (T) -> String? = { null },
+        /** Extra words a child matches on besides its label (e.g. "wlan" for Wi-Fi). */
+        childKeywords: (C) -> List<String> = { emptyList() },
     ): List<Match<T, C>> {
         if (query.isBlank()) return emptyList()
         val kids: Map<String, List<Pair<C, Int>>> = children
-            .mapNotNull { c -> score(childLabel(c), query)?.takeIf { it <= childMaxScore }?.let { c to it } }
+            .mapNotNull { c ->
+                val best = (listOf(childLabel(c)) + childKeywords(c)).mapNotNull { score(it, query) }.minOrNull()
+                best?.takeIf { it <= childMaxScore }?.let { c to it }
+            }
             .groupBy { childOwner(it.first) }
             .mapValues { (_, v) ->
                 v.sortedWith(compareBy<Pair<C, Int>> { it.second }.thenBy { normalize(childLabel(it.first)) })

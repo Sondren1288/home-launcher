@@ -3,6 +3,9 @@ package dev.sondre.launcher
 import android.app.Application
 import android.app.SearchManager
 import android.content.ActivityNotFoundException
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.os.Build
 import android.content.Intent
 import android.net.Uri
 import android.database.ContentObserver
@@ -50,6 +53,8 @@ data class UiState(
     /** Every app, A–Z, including those in folders. */
     val all: List<AppEntry> = emptyList(),
     val results: List<SearchResult> = emptyList(),
+    /** The answer when the query is arithmetic ("5*12/3" → "20"), else null. */
+    val calculation: String? = null,
     /** app key -> group it belongs to */
     val groupOfApp: Map<String, AppGroup> = emptyMap(),
     val expanded: Set<String> = emptySet(),
@@ -66,6 +71,7 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
     private val apps = MutableStateFlow<List<AppEntry>>(emptyList())
     private val shortcuts = MutableStateFlow<List<RawSubItem>>(emptyList())
     private val contacts = MutableStateFlow<List<RawSubItem>>(emptyList())
+    private val settingsPages = MutableStateFlow<List<RawSubItem>>(emptyList())
 
     /**
      * The search text lives in Compose snapshot state and the text field reads it directly.
@@ -96,7 +102,9 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
     private val userData = combine(usage.groups, usage.launchScores, usage.hidden, usage.customLabels, ::UserData)
 
     /** Shortcuts and contacts, attached to the app they belong to. */
-    private val subItems = combine(apps, shortcuts, contacts) { apps, sc, ct -> attachToApps(sc + ct, apps) }
+    private val subItems = combine(apps, shortcuts, contacts, settingsPages) { apps, sc, ct, st ->
+        attachToApps(sc + ct + st, apps)
+    }
 
     val state: StateFlow<UiState> =
         combine(apps, snapshotFlow { query }, userData, expanded, subItems) { raw, query, user, expanded, subs ->
@@ -111,6 +119,7 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
                 groups = s.groups,
                 all = listed,
                 results = search(apps, subs, query, scores),
+                calculation = Calculator.calculate(query),
                 // reversed() so the first group wins on duplicates, matching AppSearch.sections
                 groupOfApp = user.groups.reversed().flatMap { g -> g.appKeys.map { it to g } }.toMap(),
                 expanded = expanded,
@@ -124,6 +133,7 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
             items = apps, children = subs, query = query,
             label = { it.label }, key = { it.key },
             childLabel = { it.label }, childOwner = { it.ownerKey },
+            childKeywords = { it.keywords },
             boost = { scores[it.key] ?: 0.0 },
             // A renamed app is found by its own name too.
             altLabel = { it.ownLabel },
@@ -161,6 +171,7 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         reload()
+        reloadSettingsPages()
     }
 
     private fun reload() {
@@ -172,6 +183,12 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
     private fun reloadShortcuts() {
         viewModelScope.launch {
             shortcuts.value = withContext(Dispatchers.IO) { subSource.loadShortcuts() }
+        }
+    }
+
+    private fun reloadSettingsPages() {
+        viewModelScope.launch {
+            settingsPages.value = withContext(Dispatchers.IO) { subSource.loadSettingsPages() }
         }
     }
 
@@ -294,9 +311,10 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
     fun launchTopResult() {
         // Compute from the current text rather than state.results, which may lag a keystroke.
         if (query.isBlank()) return
+        Calculator.calculate(query)?.let { return copyResult(it) }
         val scores = scoresNow(usage.launchScores.value)
         val all = withUserData(apps.value, usage.hidden.value, usage.customLabels.value)
-        val subs = attachToApps(shortcuts.value + contacts.value, apps.value)
+        val subs = attachToApps(shortcuts.value + contacts.value + settingsPages.value, apps.value)
         val top = search(all, subs, query, scores).firstOrNull() ?: return searchWeb()
         if (top.matchedItself || top.children.isEmpty()) launch(top.item) else launchSub(top.children.first())
     }
@@ -323,6 +341,14 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
         toast("No app can search the web")
+    }
+
+    /** Copies a calculator result. Android 13+ confirms copies itself, so only toast before that. */
+    fun copyResult(result: String) {
+        val ctx = getApplication<Application>()
+        ctx.getSystemService(ClipboardManager::class.java)
+            ?.setPrimaryClip(ClipData.newPlainText("Result", result))
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) toast("Copied $result")
     }
 
     fun setHidden(app: AppEntry, hidden: Boolean) = usage.setHidden(app.key, hidden)

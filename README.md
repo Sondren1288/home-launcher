@@ -20,6 +20,12 @@ A minimal Android home screen: collapsible sections — **Folders** (your groups
   Search covers all apps, regardless of what's collapsed. Matching ignores case and accents and ranks: prefix > word prefix > initials
   (`gm` → Google Maps) > substring > subsequence. Ties go to the app you use most (see Most used below).
   Press Go/Enter on the keyboard to open the top result.
+  **Calculator:** arithmetic shows its answer right above the search bar: `3+3`, `5*12/3`, `2,5 × 4`
+  (answers with a comma if you typed one), `2^10`, `2(3+4)`, and phone-calculator percentages
+  (`200+10%` = 220, `50*15%` = 7.5). Tap it, or press Go, to copy the answer.
+  **Settings pages** are found under the Settings app: `wifi`/`wlan` → Wi-Fi, `lyd` → Sound,
+  `batteri`, `flymodus`, `hotspot`, `standard` (default apps)… English and Norwegian words both work;
+  the list and its keywords are in `SettingsPages.kt`.
   When nothing matches, the result is "Search the web for …" (also what Go does then). It uses the phone's
   web search app; Android asks which one the first time, and "Alltid" makes it remember.
 - Search also finds things *inside* apps and shows them indented under the app they belong to
@@ -64,7 +70,9 @@ A minimal Android home screen: collapsible sections — **Folders** (your groups
 | `.../AppRepository.kt` | App list (`LauncherApps`), launching, square icon rendering, change callbacks |
 | `.../Frecency.kt` | "Most used" score: launches that fade over time (unit tested) |
 | `.../UsageStore.kt` | Groups, launch counts/scores, hidden apps, custom names (SharedPreferences) |
-| `.../SubItems.kt` | In-app search sources: app shortcuts and contacts, and launching them |
+| `.../SubItems.kt` | In-app search sources: app shortcuts, contacts and Settings pages, and launching them |
+| `.../SettingsPages.kt` | Settings screens search can open, with their English/Norwegian keywords |
+| `.../Calculator.kt` | Arithmetic in the search bar (unit tested) |
 | `.../LockService.kt` | Accessibility service used only to lock the screen (double-tap) |
 | `.../Clock.kt` | Home-screen clock (minute ticks, locale date) and opening the clock app |
 | `.../LauncherViewModel.kt` | Combines the above into `UiState` |

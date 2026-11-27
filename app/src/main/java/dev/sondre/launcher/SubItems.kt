@@ -27,6 +27,9 @@ sealed interface SubTarget {
 
     /** An app-specific contact action, e.g. "Message +47…" in WhatsApp. */
     data class ContactAction(val dataId: Long, val mimeType: String, val packageName: String) : SubTarget
+
+    /** A Settings screen, opened by its intent action. */
+    data class Settings(val action: String) : SubTarget
 }
 
 /** A sub-result before it's been attached to an [AppEntry]. */
@@ -38,10 +41,18 @@ data class RawSubItem(
     /** The specific launcher activity it belongs to, if known. */
     val component: ComponentName?,
     val target: SubTarget,
+    /** Extra words that find it besides [label] (settings pages: "wlan" → Wi-Fi). */
+    val keywords: List<String> = emptyList(),
 )
 
 /** A sub-result shown indented beneath the app it belongs to. */
-data class SubEntry(val id: String, val label: String, val ownerKey: String, val target: SubTarget)
+data class SubEntry(
+    val id: String,
+    val label: String,
+    val ownerKey: String,
+    val target: SubTarget,
+    val keywords: List<String> = emptyList(),
+)
 
 /** Attach each item to the app it belongs to; items whose app isn't in [apps] are dropped. */
 fun attachToApps(items: List<RawSubItem>, apps: List<AppEntry>): List<SubEntry> {
@@ -52,7 +63,7 @@ fun attachToApps(items: List<RawSubItem>, apps: List<AppEntry>): List<SubEntry> 
     return items.mapNotNull { item ->
         val owner = item.component?.let { byComponent[it to item.user] }
             ?: byPackage[item.packageName to item.user]?.firstOrNull()
-        owner?.let { SubEntry(item.id, item.label, it.key, item.target) }
+        owner?.let { SubEntry(item.id, item.label, it.key, item.target, item.keywords) }
     }
 }
 
@@ -180,6 +191,19 @@ class SubItemSource(private val context: Context) {
         return pm.queryIntentActivities(probe, 0).isNotEmpty()
     }
 
+    /**
+     * The [SettingsPages] this phone can open, under the Settings app. Pages handled by another
+     * system app (default apps → permission controller) still sit under Settings. Blocking.
+     */
+    fun loadSettingsPages(): List<RawSubItem> {
+        val settingsPkg = pm.resolveActivity(Intent(android.provider.Settings.ACTION_SETTINGS), 0)
+            ?.activityInfo?.packageName ?: return emptyList()
+        val me = Process.myUserHandle()
+        return SettingsPages.all
+            .filter { pm.resolveActivity(Intent(it.action), 0) != null }
+            .map { RawSubItem("set:${it.id}", it.label, settingsPkg, me, null, SubTarget.Settings(it.action), it.keywords) }
+    }
+
     /** The default Contacts app, which owns plain contact results. */
     private fun contactsAppPackage(): String? {
         val intent = Intent.makeMainSelectorActivity(Intent.ACTION_MAIN, Intent.CATEGORY_APP_CONTACTS)
@@ -202,6 +226,9 @@ class SubItemSource(private val context: Context) {
                     .setDataAndType(ContentUris.withAppendedId(ContactsContract.Data.CONTENT_URI, target.dataId), target.mimeType)
                     .setPackage(target.packageName)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+            is SubTarget.Settings -> context.startActivity(
+                Intent(target.action).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             )
         }
         true

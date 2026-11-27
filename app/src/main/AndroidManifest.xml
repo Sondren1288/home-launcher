@@ -16,6 +16,13 @@
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
         </intent>
+        <!-- Settings pages in search that aren't in the Settings app itself (permission controller). -->
+        <intent>
+            <action android:name="android.settings.MANAGE_DEFAULT_APPS_SETTINGS" />
+        </intent>
+        <intent>
+            <action android:name="android.settings.HOME_SETTINGS" />
+        </intent>
         <!-- Other home apps (One UI Home), searchable as a "visit". -->
         <intent>
             <action android:name="android.intent.action.MAIN" />
